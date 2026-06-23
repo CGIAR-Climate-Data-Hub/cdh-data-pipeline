@@ -17,8 +17,13 @@ def open_store(url):
 def open_raster(url, name=None, *, chunks=None):
     """Read a single-band raster as a clean float32 DataArray (nodata -> NaN).
 
-    chunks=None loads eager; chunks=-1 stays lazy as one dask chunk. Per-file
-    STATISTICS_* attrs are dropped; the caller sets clean attrs on the variable.
+    chunks controls loading -- a memory-vs-simplicity trade-off:
+      - None -> eager: read the whole array into memory now. Simplest; use when a
+        recipe opens only a handful of small rasters.
+      - -1   -> lazy: one dask chunk for the whole grid, not read until computed. Use
+        when stacking many layers into one dataset so they stream through to_zarr
+        instead of all loading into RAM at once (e.g. mapspam's 552 layers).
+    Per-file STATISTICS_* attrs are dropped; the caller sets clean attrs on the variable.
     """
     da = rxr.open_rasterio(url, masked=True, chunks=chunks)
     assert isinstance(da, xr.DataArray)  # single-band raster -> DataArray
