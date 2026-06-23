@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Secrets (loaded via `uv run --env-file .env`)
+.env
+
 # Source data + build outputs (large; not version-controlled)
 glw4/
 spam_ifpri/
