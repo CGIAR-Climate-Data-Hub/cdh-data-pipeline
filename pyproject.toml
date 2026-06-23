@@ -1,0 +1,35 @@
+[project]
+name = "cdh-data-pipeline"
+version = "0.1.0"
+description = "Shared plumbing + recipes for turning source datasets into ARCO zarr + COGs"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Brayden Youngberg", email = "bjyberg1@gmail.com" }]
+# floors = versions this was developed + tested against (uv.lock pins exact);
+# zarr>=3.2 is a hard requirement -- v3 sharding + BloscCodec + ObjectStore.
+dependencies = [
+    "dask>=2025.1.0",
+    "obstore>=0.9.0",
+    "rasterio>=1.4.0",
+    "rioxarray>=0.18.0",
+    "xarray>=2025.1.0",
+    "zarr>=3.2.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.21,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "prek>=0.4.5",
+    "pytest>=9.1.0",
+    "ruff>=0.15.18",
+    "ty>=0.0.52",
+]
+
+[tool.ruff.lint]
+extend-select = ["I"]  # import sorting
+
+[tool.ruff.lint.isort]
+known-first-party = ["cdh_data_pipeline"]
