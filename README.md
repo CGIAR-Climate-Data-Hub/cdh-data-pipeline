@@ -19,6 +19,36 @@ A recipe imports the helpers, declares its own source mapping + dataset
 assembly, and calls `write_zarr` / `make_cog`. Adding a dataset = a new file in
 `recipes/`.
 
+## Running
+
+Run a recipe from the **repo root** — `run(...)` executes its build steps (any
+`fetch` → zarr → COGs) in order and writes a zarr store + COGs to the recipe's
+`OUTPUT`:
+
+```sh
+uv run recipes/glw4.py
+uv run --env-file .env recipes/mapspam.py   # needs $DATAVERSE_TOKEN (see Credentials)
+```
+
+Re-running overwrites the outputs; a `fetch` step (if any) skips source files
+already downloaded.
+
+## Adding a dataset
+
+Copy `recipes/glw4.py` (the minimal example) and edit four things:
+
+1. **Config** — `INPUT` (source path/URL), `OUTPUT` (local or `s3://`/`gs://`), and the
+   source naming (a `SRC` template or a `src()` helper).
+2. **Assembly** — read sources with `open_raster`, build an `xarray.Dataset`, set
+   `title`/`source` attrs.
+3. **`build_zarr()` / `build_cogs()`** — call `write_zarr(ds, url, encoding)` (GeoZarr
+   tagging + vlen string coords are handled for you) and `make_cog(srcs, names, units)`
+   per COG (pass 1-element lists for single-band).
+4. **Entry point** — `run(build_zarr, build_cogs)`, prepending a `fetch` step if the
+   source must be downloaded first.
+
+No registration step — a recipe is just a runnable script that calls the shared helpers.
+
 ## Credentials
 
 Credentials come from the **environment**
