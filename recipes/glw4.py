@@ -7,10 +7,10 @@ import xarray as xr
 
 from cdh_data_pipeline import (
     blosc_zstd,
+    make_cog,
     open_raster,
     open_store,
     run,
-    write_cogs,
     write_zarr,
 )
 
@@ -55,17 +55,13 @@ def build_zarr():
 
 def build_cogs():
     cogs = open_store(f"{OUTPUT}/cog")
-    jobs = [
-        (
+    for code, name in SPECIES.items():
+        url = f"{INPUT}/{SRC.format(code=code)}"
+        cogs.put(
             f"glw4-2020-{name}.tif",
-            f"{INPUT}/{SRC.format(code=code)}",
-            f"{name.capitalize()} density",
-            "head/km2",
+            make_cog([url], [f"{name.capitalize()} density"], "head/km2"),
         )
-        for code, name in SPECIES.items()
-    ]
-    write_cogs(cogs, jobs)
-    print(f"wrote {len(jobs)} COGs to {OUTPUT}/cog")
+    print(f"wrote {len(SPECIES)} COGs to {OUTPUT}/cog")
 
 
 if __name__ == "__main__":
