@@ -9,6 +9,7 @@ authors = [{ name = "Brayden Youngberg", email = "bjyberg1@gmail.com" }]
 # zarr>=3.2 is a hard requirement -- v3 sharding + BloscCodec + ObjectStore.
 dependencies = [
     "dask>=2025.1.0",
+    "geozarr-toolkit>=0.1.2,<0.2",  # pre-1.0 spec tool -> cap the minor
     "obstore>=0.9.0",
     "rasterio>=1.4.0",
     "rioxarray>=0.18.0",
