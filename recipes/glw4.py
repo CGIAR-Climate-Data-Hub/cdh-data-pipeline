@@ -3,15 +3,15 @@
 Run from the repo root: uv run recipes/glw4.py
 """
 
+import rioxarray  # noqa: F401  registers the .rio accessor used by write_crs
 import xarray as xr
 
 from cdh_data_pipeline import (
-    blosc_zstd,
     make_cog,
     open_raster,
     open_store,
     run,
-    write_zarr,
+    write_multiscale_zarr,
 )
 
 # config: INPUT/OUTPUT are any local path or s3://, gs://, https:// URL
@@ -42,14 +42,15 @@ def load(code, name):
 
 def build_zarr():
     das = {name: load(code, name) for code, name in SPECIES.items()}
-    ds = xr.Dataset(das)
+    ds = xr.Dataset(das).rio.write_crs("EPSG:4326")
     ds.attrs.update(
         title="GLW4 2020 livestock density",
         source="Gridded Livestock of the World v4 (GLW4), 2020, dasymetric",
     )
-    # ~1 MB spatial chunks (540px ~45deg) for regional reads; no sharding
-    enc = {name: {"chunks": (540, 540), "compressors": (blosc_zstd(),)} for name in das}
-    write_zarr(ds, f"{OUTPUT}/glw4-2020.zarr", enc)
+    # one multiscale GeoZarr store: /<species>/0 = native + /1../3 overviews (x2 each),
+    # one multiscales group per species. Serves regional analysis, deck.gl-raster, and
+    # GDAL from one store. All species are densities (head/km2) -> mean.
+    write_multiscale_zarr(ds, f"{OUTPUT}/glw4-2020.zarr", factors=[2, 4, 8])
     print(f"wrote {OUTPUT}/glw4-2020.zarr")
 
 
