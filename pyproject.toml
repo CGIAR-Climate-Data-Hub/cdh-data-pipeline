@@ -13,6 +13,8 @@ dependencies = [
     "obstore>=0.9.0",
     "rasterio>=1.4.0",
     "rioxarray>=0.18.0",
+    "topozarr>=0.1.2,<0.2",  # multiscale pyramids (Rust kernel); pre-1.0 -> cap the minor
+    "xproj>=0.1.0",  # CRS accessor topozarr reads (ds.proj.assign_crs)
     "xarray>=2025.1.0",
     "zarr>=3.2.0",
 ]

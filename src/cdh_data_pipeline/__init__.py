@@ -7,7 +7,7 @@ these helpers for the identical write side.
 from cdh_data_pipeline.cog import COG_OPTS, make_cog
 from cdh_data_pipeline.recipe import run
 from cdh_data_pipeline.storage import open_raster, open_store
-from cdh_data_pipeline.zarr import blosc_zstd, write_zarr
+from cdh_data_pipeline.zarr import blosc_zstd, write_multiscale_zarr, write_zarr
 
 __all__ = [
     "COG_OPTS",
@@ -16,5 +16,6 @@ __all__ = [
     "open_raster",
     "open_store",
     "run",
+    "write_multiscale_zarr",
     "write_zarr",
 ]
