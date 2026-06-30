@@ -56,7 +56,14 @@ def write_zarr(ds, url, encoding, *, consolidated=True):
 
 
 def write_multiscale_zarr(
-    ds, url, *, methods=None, factors=None, chunks_per_shard=None, compressors=None
+    ds,
+    url,
+    *,
+    methods=None,
+    factors=None,
+    chunks_per_shard=None,
+    compressors=None,
+    level_encoding=None,
 ):
     """Write ``ds`` as a multiscale (overview) GeoZarr store -- one group per variable.
 
@@ -76,6 +83,16 @@ def write_multiscale_zarr(
         the codec is fixed to zarr's zstd default). Pass a tuple of zarr-v3 codecs (e.g.
         ``(blosc_zstd(),)``) to control compression -- topozarr only coarsens and we write
         via xarray (no Rust kernel; build inline, not from a store read-back, for big data).
+    level_encoding : callable ``(var, level_index, sizes) -> zarr_encoding`` returning the
+        encoding dict for that variable at that level (we key it by ``var`` for you) -- the only
+        way to chunk/shard levels differently (chunks valid for the native grid are wrong for a
+        coarsened one) and to give different variables different layouts. ``level_index`` 0 = native;
+        ``sizes`` is that level's ``{dim: size}``, so chunks and shards can scale with the grid.
+        Use it for one store, two read patterns: native chunked for point time-series
+        (``chunks=(T, 4, 4)`` + shards) and overviews chunked one-frame-per-tile
+        (``chunks=(1, sizes["y"], sizes["x"])`` + a whole-level shard) so a web map animates
+        over time. Takes the xarray write path (build inline for big data); supersedes
+        ``compressors``.
     """
     methods = methods or {}
     if factors is not None:
@@ -92,7 +109,19 @@ def write_multiscale_zarr(
             chunks_per_shard=chunks_per_shard,
         )
         sub = ObjectStore(open_store(f"{url}/{var}"))
-        if compressors is None:
+        if level_encoding is not None:  # chunks differ by level -> xarray write
+            dt = pyr.as_datatree()
+            # pyr.encoding keys are "/0", "/1", ... (0 = native); ask the caller per var+level
+            enc = {
+                k: {
+                    var: level_encoding(
+                        var, int(k.strip("/")), dict(dt[k.strip("/")].sizes)
+                    )
+                }
+                for k in pyr.encoding
+            }
+            dt.to_zarr(sub, mode="a", zarr_format=3, consolidated=False, encoding=enc)
+        elif compressors is None:
             pyr.write(sub, mode="a")  # topozarr Rust kernel; zstd-default codec
         else:  # topozarr coarsens, xarray writes -> we set the codec via the encoding
             enc = pyr.encoding
