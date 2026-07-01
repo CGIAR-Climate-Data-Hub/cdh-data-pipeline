@@ -11,21 +11,26 @@ inspired by the pangeo forge pipeline.
   - `storage.py` — obstore store factory + source raster reading
   - `zarr.py` — zarr writing (compression codec + `write_zarr`)
   - `cog.py` — COG conversion (`make_cog`, `COG_OPTS`)
-- `recipes/` — one script per dataset (the part that differs)
+- `recipes/` — one script per ingested dataset (the part that differs)
   - `glw4.py` — GLW4 livestock density
   - `mapspam.py` — MapSPAM 2020 V2r2 crop statistics
+  - `examples/` — runnable reference recipes that aren't ingested (write
+    locally, demo a technique); copy one as a starting point. e.g.
+    `berkeley_tavg.py` (multiscale store with per-level chunking for point +
+    animated-map reads).
 
 A recipe imports the helpers, declares its own source mapping + dataset
 assembly, and calls `write_zarr` / `make_cog`. Adding a dataset = a new file in
-`recipes/`.
+`recipes/` (or `recipes/examples/` for a demo that isn't ingested).
 
 ## Running
 
 Run a recipe from the **repo root** — `run(...)` executes its build steps (any
 `fetch` → zarr → COGs) in order and writes a zarr store + COGs to the recipe's
-`OUTPUT`:
+`OUTPUT`.
 
 ```sh
+# For example
 uv run recipes/glw4.py
 uv run --env-file .env recipes/mapspam.py   # needs $DATAVERSE_TOKEN (see Credentials)
 ```
@@ -37,24 +42,26 @@ already downloaded.
 
 Copy `recipes/glw4.py` (the minimal example) and edit four things:
 
-1. **Config** — `INPUT` (source path/URL), `OUTPUT` (local or `s3://`/`gs://`), and the
-   source naming (a `SRC` template or a `src()` helper).
-2. **Assembly** — read sources with `open_raster`, build an `xarray.Dataset`, set
-   `title`/`source` attrs.
-3. **`build_zarr()` / `build_cogs()`** — call `write_zarr(ds, url, encoding)` (GeoZarr
-   tagging + vlen string coords are handled for you) and `make_cog(srcs, names, units)`
-   per COG (pass 1-element lists for single-band).
-4. **Entry point** — `run(build_zarr, build_cogs)`, prepending a `fetch` step if the
-   source must be downloaded first.
+1. **Config** — `INPUT` (source path/URL), `OUTPUT` (local or `s3://`/`gs://`),
+   and the source naming (a `SRC` template or a `src()` helper).
+2. **Assembly** — read sources with `open_raster`, build an `xarray.Dataset`,
+   set `title`/`source` attrs.
+3. **`build_zarr()` / `build_cogs()`** — call `write_zarr(ds, url, encoding)`
+   (GeoZarr tagging + vlen string coords are handled for you) and
+   `make_cog(srcs, names, units)` per COG (pass 1-element lists for
+   single-band).
+4. **Entry point** — `run(build_zarr, build_cogs)`, prepending a `fetch` step if
+   the source must be downloaded first.
 
-No registration step — a recipe is just a runnable script that calls the shared helpers.
+No registration step — a recipe is just a runnable script that calls the shared
+helpers.
 
 ## Credentials
 
 Credentials come from the **environment**
 
 - **`OUTPUT` (obstore)** reads credentials from **environment variables only** —
-  it does *not* parse `~/.aws/credentials` / `AWS_PROFILE`. For S3:
+  it does _not_ parse `~/.aws/credentials` / `AWS_PROFILE`. For S3:
   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (+ `AWS_SESSION_TOKEN`,
   `AWS_REGION`); for GCS: `GOOGLE_APPLICATION_CREDENTIALS` (service-account JSON
   path). To use an AWS profile, export it into the env first, e.g.
