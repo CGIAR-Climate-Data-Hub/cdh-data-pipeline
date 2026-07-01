@@ -3,8 +3,8 @@
 (``import zarr`` below is the installed package -- absolute imports, no shadow.)
 """
 
-import rioxarray  # noqa: F401  registers .rio (CRS source for multiscale writes)
-import xproj  # noqa: F401  registers .proj (topozarr reads the CRS via this convention)
+import rioxarray  # noqa: F401  registers .rio
+import xproj  # noqa: F401  registers .proj
 import zarr
 from geozarr_toolkit import (
     ProjConventionMetadata,
@@ -20,7 +20,7 @@ from cdh_data_pipeline.storage import open_store
 
 
 def blosc_zstd(typesize=4, clevel=9):
-    """blosc-zstd + byte-shuffle: ~10% smaller than plain zstd on float32."""
+    """blosc-zstd + byte-shuffle default"""
     return BloscCodec(
         cname="zstd", clevel=clevel, shuffle=BloscShuffle.shuffle, typesize=typesize
     )
@@ -29,10 +29,10 @@ def blosc_zstd(typesize=4, clevel=9):
 def write_zarr(ds, url, encoding, *, consolidated=True):
     """Write a Dataset to an obstore-backed, GeoZarr-tagged zarr store.
 
-    Each data variable is tagged with GeoZarr spatial:/proj: attrs derived from its
-    rioxarray CRS + grid, so the store is recognized as geospatial. consolidated=True
-    (default) bundles node metadata for single-request cloud opens (the ARCO
-    convention); pass False for strict core-v3-spec portability (zarr-python warns
+    Each data variable is tagged with GeoZarr attrs derived from its
+    rioxarray attrs, so the store is recognized as geospatial. consolidated=True
+    (default) bundles node metadata for single-request cloud opens;
+    pass False for strict core-v3-spec portability (zarr-python warns
     it's an extension, not in the v3 spec).
     """
     # zarr v3 has no stable spec for fixed-length unicode; store string coords as
@@ -61,42 +61,52 @@ def write_multiscale_zarr(
     *,
     methods=None,
     factors=None,
-    chunks_per_shard=None,
     compressors=None,
-    level_encoding=None,
+    encoding=None,
+    chunking=None,
 ):
-    """Write ``ds`` as a multiscale (overview) GeoZarr store -- one group per variable.
+    """Write a multiscale GeoZarr store (zarr w/ internal pyramids/overviews).
 
-    Like :func:`write_zarr`, but each variable also gets coarser overview levels, so the
-    store serves full-resolution analysis and zoomed-out / web-map reads from one place.
-    Layout: ``<store>.zarr/<var>/{0,1,2,...}/<var>`` (0 = native, then coarser). topozarr
-    does the coarsening (native grid); we drive it once per variable -- which is how each
-    variable keeps its own resampling method in one store -- and stitch a root group on top.
+    The output layout is ``<store>.zarr/<var>/{0,1,2,...}/<var>``. Level 0 contains
+    the native-resolution data; subsequent levels contain coarsened overviews.
 
-    methods : variable -> ``"mean"`` (default) | ``"sum"`` | ``"max"`` | ``"min"``.
-        Per-variable: "sum" for totals (production, area), "mean" for densities/ratios.
-    factors : cumulative downsample factors; native (1) is added if missing, e.g.
-        ``[2, 4, 8]`` -> ``[1, 2, 4, 8]``. ``None`` -> topozarr picks a power-of-two ladder.
-    chunks_per_shard : ``None`` (default) keeps tiles individually addressable; an int N
-        wraps an N x N block of chunks into each zarr-v3 shard.
-    compressors : ``None`` (default) -> topozarr's Rust write (fast, region-streamed, but
-        the codec is fixed to zarr's zstd default). Pass a tuple of zarr-v3 codecs (e.g.
-        ``(blosc_zstd(),)``) to control compression -- topozarr only coarsens and we write
-        via xarray (no Rust kernel; build inline, not from a store read-back, for big data).
-    level_encoding : callable ``(var, level_index, sizes) -> zarr_encoding`` returning the
-        encoding dict for that variable at that level (we key it by ``var`` for you) -- the only
-        way to chunk/shard levels differently (chunks valid for the native grid are wrong for a
-        coarsened one) and to give different variables different layouts. ``level_index`` 0 = native;
-        ``sizes`` is that level's ``{dim: size}``, so chunks and shards can scale with the grid.
-        Use it for one store, two read patterns: native chunked for point time-series
-        (``chunks=(T, 4, 4)`` + shards) and overviews chunked one-frame-per-tile
-        (``chunks=(1, sizes["y"], sizes["x"])`` + a whole-level shard) so a web map animates
-        over time. Takes the xarray write path (build inline for big data); supersedes
-        ``compressors``.
+    ``methods`` maps variable names to downsampling methods: ``"mean"``, ``"sum"``,
+    ``"max"``, or ``"min"``. Unspecified variables use ``"mean"``.
+
+    ``factors`` gives cumulative downsampling factors. Factor 1 is added
+    automatically if missing. If omitted, topozarr chooses a power-of-two pyramid.
+
+    ``compressors`` is a shortcut for applying the same Zarr codec tuple to all
+    variables. It is merged into ``encoding``; explicit per-variable ``encoding``
+    entries take precedence.
+
+    ``encoding`` is a mapping of variable name to Zarr encoding and is applied to
+    every level of that variable. Use it for settings that should not vary by
+    overview level, such as dtype, scale factors, fill values, and compressors.
+
+    ``chunking`` may be either an integer or a callable. An integer is passed to
+    topozarr as ``chunks_per_shard`` and uses the fast Rust writer, unless
+    ``encoding`` or ``compressors`` require the custom xarray path. A callable must
+    accept ``(var, level_index, sizes)`` and return a dict containing ``"chunks"``
+    and/or ``"shards"`` for that level.
     """
     methods = methods or {}
     if factors is not None:
         factors = sorted({1, *factors})
+    # chunking is int (N chunks/shard, fast Rust path) XOR callable (per-level, xarray path)
+    per_shard = chunking if isinstance(chunking, int) else None
+    level_fn = chunking if callable(chunking) else None
+    if chunking is not None and per_shard is None and level_fn is None:
+        raise TypeError(
+            "chunking must be an int (N chunks/shard) or a callable "
+            f"(var, level, sizes) -> {{'chunks':..,'shards':..}}; got {type(chunking).__name__}"
+        )
+    # `compressors` = shorthand for that codec on every variable -> fold into encoding
+    if compressors is not None:
+        encoding = {
+            v: {"compressors": compressors, **(encoding or {}).get(v, {})}
+            for v in ds.data_vars
+        }
     # topozarr reads the CRS via the proj convention (xproj); seed it from rioxarray's CRS.
     ds = ds.proj.assign_crs(spatial_ref=ds.rio.crs.to_string(), allow_override=True)
     root = ObjectStore(open_store(url))
@@ -106,30 +116,25 @@ def write_multiscale_zarr(
             ds[[var]],
             factors=factors,
             method=methods.get(var, "mean"),
-            chunks_per_shard=chunks_per_shard,
+            chunks_per_shard=per_shard,
         )
         sub = ObjectStore(open_store(f"{url}/{var}"))
-        if level_encoding is not None:  # chunks differ by level -> xarray write
+        # custom layout (per-var encoding and/or per-level chunks) -> xarray write
+        if encoding is not None or level_fn is not None:
             dt = pyr.as_datatree()
-            # pyr.encoding keys are "/0", "/1", ... (0 = native); ask the caller per var+level
-            enc = {
-                k: {
-                    var: level_encoding(
-                        var, int(k.strip("/")), dict(dt[k.strip("/")].sizes)
+            base = (encoding or {}).get(var, {})
+            enc = {}
+            for k in pyr.encoding:  # keys "/0","/1",... (0 = native)
+                lvl, sizes = int(k.strip("/")), dict(dt[k.strip("/")].sizes)
+                shapes = level_fn(var, lvl, sizes) if level_fn else {}
+                if not isinstance(shapes, dict) or shapes.keys() - {"chunks", "shards"}:
+                    raise ValueError(
+                        f"chunking({var!r}, {lvl}, ...) must return a dict of "
+                        f"'chunks'/'shards' (encoding goes in `encoding=`); got {shapes!r}"
                     )
-                }
-                for k in pyr.encoding
-            }
+                enc[k] = {var: {**base, **shapes}}
             dt.to_zarr(sub, mode="a", zarr_format=3, consolidated=False, encoding=enc)
-        elif compressors is None:
+        else:
             pyr.write(sub, mode="a")  # topozarr Rust kernel; zstd-default codec
-        else:  # topozarr coarsens, xarray writes -> we set the codec via the encoding
-            enc = pyr.encoding
-            for level in enc.values():
-                for var_enc in level.values():
-                    var_enc["compressors"] = compressors
-            pyr.as_datatree().to_zarr(
-                sub, mode="a", zarr_format=3, consolidated=False, encoding=enc
-            )
     zarr.consolidate_metadata(root)
     print(f"wrote {url} ({len(ds.data_vars)} vars, multiscale)")
