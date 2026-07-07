@@ -1,8 +1,6 @@
-"""Object store access + source raster reading.
+"""Object-store access and raster loading."""
 
-URLs pick the backend by scheme, so a local dir swaps for a cloud bucket later
-with no code change.
-"""
+import json
 
 import rioxarray as rxr
 import xarray as xr
@@ -10,23 +8,34 @@ from obstore.store import LocalStore, from_url
 
 
 def open_store(url):
-    """obstore store for a base URL/path (local path -> LocalStore, else by scheme)."""
+    """Return an obstore store for a local path or URL."""
     return from_url(url) if "://" in url else LocalStore(url, mkdir=True)
 
 
-def open_raster(url, name=None, *, chunks=None):
-    """Read a single-band raster as a clean float32 DataArray (nodata -> NaN).
+def clear_store(store):
+    """Delete all keys from an obstore store."""
+    for batch in store.list():
+        paths = [meta["path"] for meta in batch]
+        if paths:
+            store.delete(paths)
 
-    chunks controls loading -- a memory-vs-simplicity trade-off:
-      - None -> eager: read the whole array into memory now. Simplest; use when a
-        recipe opens only a handful of small rasters.
-      - -1   -> lazy: one dask chunk for the whole grid, not read until computed. Use
-        when stacking many layers into one dataset so they stream through to_zarr
-        instead of all loading into RAM at once (e.g. mapspam's 552 layers).
-    Per-file STATISTICS_* attrs are dropped; the caller sets clean attrs on the variable.
+
+def write_json(url, data):
+    """Write a dict as JSON to a local path or object-store URL."""
+    prefix, _, name = url.rpartition("/")
+    open_store(prefix).put(name, json.dumps(data, indent=2).encode())
+    print(f"wrote {url}")
+
+
+def open_raster(url, name=None, *, chunks=None):
+    """Read a single-band raster as float32 with nodata mapped to NaN.
+
+    ``chunks=None`` loads eagerly. ``chunks=-1`` keeps one lazy Dask chunk per raster,
+    useful when a recipe stacks many layers before writing.
+    Source attrs are cleared; recipes set normalized metadata.
     """
     da = rxr.open_rasterio(url, masked=True, chunks=chunks)
-    assert isinstance(da, xr.DataArray)  # single-band raster -> DataArray
+    assert isinstance(da, xr.DataArray)
     if "band" in da.dims and da.sizes["band"] == 1:
         da = da.squeeze("band", drop=True)
     da = da.astype("float32")

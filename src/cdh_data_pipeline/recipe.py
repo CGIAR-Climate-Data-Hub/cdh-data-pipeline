@@ -1,16 +1,13 @@
-"""Recipe entrypoint: run a recipe's build steps, then clean up."""
+"""Recipe entrypoint helpers."""
 
 import os
 import sys
 
 
 def run(*builders):
-    """Run each build step in order, then hard-exit.
+    """Run build steps, flush output, then hard-exit.
 
-    Call from a recipe's __main__: ``run(build_zarr, build_cogs)`` -- pass as many
-    builders as the recipe has (e.g. two zarr stores with different chunking). Once
-    they return the work is flushed; zarr v3 + obstore leave noisy async threads at
-    shutdown, so we os._exit rather than sit through the messy teardown.
+    zarr v3 and obstore can leave noisy async teardown at interpreter shutdown.
     """
     for build in builders:
         build()
