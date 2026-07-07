@@ -1,26 +1,24 @@
-"""GLW4 livestock rasters -> efficient zarr store + cleanly-named COGs.
+"""GLW4 livestock rasters -> Zarr store and COGs.
 
 Run from the repo root: uv run recipes/glw4.py
 """
 
-import rioxarray  # noqa: F401  registers the .rio accessor used by write_crs
+import rioxarray  # noqa: F401  registers .rio
 import xarray as xr
 
 from cdh_data_pipeline import (
-    make_cog,
+    blosc_zstd,
     open_raster,
-    open_store,
     run,
-    write_multiscale_zarr,
+    write_cog,
+    write_zarr,
 )
 
-# config: INPUT/OUTPUT are any local path or s3://, gs://, https:// URL
-# (rasterio/GDAL auto-resolves https:// to /vsicurl, so sources stream over HTTP)
+# INPUT/OUTPUT may be local paths or object-storage URLs.
 INPUT = "https://storage.googleapis.com/fao-gismgr-glw4-2020-data/DATA/GLW4-2020/MAPSET/D-DA"
 OUTPUT = "s3://digital-atlas/cdh/data/glw4-2020"
 SRC = "GLW4-2020.D-DA.{code}.tif"
 
-# code -> readable name
 SPECIES = {
     "BFL": "buffalo",
     "CHK": "chicken",
@@ -47,22 +45,23 @@ def build_zarr():
         title="GLW4 2020 livestock density",
         source="Gridded Livestock of the World v4 (GLW4), 2020, dasymetric",
     )
-    # one multiscale GeoZarr store: /<species>/0 = native + /1../3 overviews (x2 each),
-    # one multiscales group per species. Serves regional analysis, deck.gl-raster, and
-    # GDAL from one store. All species are densities (head/km2) -> mean.
-    write_multiscale_zarr(ds, f"{OUTPUT}/glw4-2020.zarr", factors=[2, 4, 8])
-    print(f"wrote {OUTPUT}/glw4-2020.zarr")
+    # write_multiscale_zarr(..., layout="level") for overview pyramids
+    enc = {
+        v: {"chunks": (1080, 1080), "compressors": (blosc_zstd(),)}
+        for v in ds.data_vars
+    }
+    write_zarr(ds, f"{OUTPUT}/glw4-2020.zarr", enc)
 
 
 def build_cogs():
-    cogs = open_store(f"{OUTPUT}/cog")
     for code, name in SPECIES.items():
         url = f"{INPUT}/{SRC.format(code=code)}"
-        cogs.put(
-            f"glw4-2020-{name}.tif",
-            make_cog([url], [f"{name.capitalize()} density"], "head/km2"),
+        write_cog(
+            f"{OUTPUT}/cog/glw4-2020-{name}.tif",
+            [url],
+            [f"{name.capitalize()} density"],
+            "head/km2",
         )
-    print(f"wrote {len(SPECIES)} COGs to {OUTPUT}/cog")
 
 
 if __name__ == "__main__":
