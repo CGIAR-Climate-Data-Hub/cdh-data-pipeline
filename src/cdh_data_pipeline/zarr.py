@@ -43,14 +43,22 @@ def _replace_sum_levels(dt, var, factors):
         dt[str(lvl)][var] = prev.assign_attrs(dt[str(lvl)][var].attrs)
 
 
+def _open_zarr_store(url):
+    """Open a zarr store after clearing an existing .zarr prefix."""
+    if not url.rstrip("/").endswith(".zarr"):
+        raise ValueError(f"refusing to overwrite non-.zarr store: {url}")
+    store = open_store(url)
+    clear_store(store)
+    return store
+
+
 def write_zarr(ds, url, encoding, *, consolidated=True):
     """Write a Dataset to an obstore-backed GeoZarr store.
 
     Each data variable receives GeoZarr attrs from rioxarray. Consolidated metadata
     makes cloud opens cheaper, but it is a zarr-python extension for v3 stores.
     """
-    store = open_store(url)
-    clear_store(store)
+    store = _open_zarr_store(url)
     ds = _vlen_str_coords(ds)
 
     conventions = create_zarr_conventions(
@@ -68,7 +76,9 @@ def write_zarr(ds, url, encoding, *, consolidated=True):
     print(f"wrote {url} ({len(ds.data_vars)} vars)")
 
 
-def _write_pyramid(pyr, target, variables, methods, encoding, level_fn, conventions, url):
+def _write_pyramid(
+    pyr, target, variables, methods, encoding, level_fn, conventions, url
+):
     """Write one (possibly multi-variable) pyramid to ``target`` and stamp CRS attrs.
 
     Shared by both layouts: variable-first calls it once per variable into a
@@ -187,8 +197,7 @@ def write_multiscale_zarr(
     ds = _vlen_str_coords(ds)
     # topozarr reads CRS from xproj metadata.
     ds = ds.proj.assign_crs(spatial_ref=ds.rio.crs.to_string(), allow_override=True)
-    store = open_store(url)
-    clear_store(store)
+    store = _open_zarr_store(url)
     root = ObjectStore(store)
     zarr.open_group(root, mode="w")
     conventions = create_zarr_conventions(
@@ -202,7 +211,9 @@ def write_multiscale_zarr(
             method=next(iter(used_methods)),
             chunks_per_shard=per_shard,
         )
-        _write_pyramid(pyr, root, variables, methods, encoding, level_fn, conventions, url)
+        _write_pyramid(
+            pyr, root, variables, methods, encoding, level_fn, conventions, url
+        )
     else:
         for var in variables:
             pyr = create_pyramid(
@@ -212,7 +223,9 @@ def write_multiscale_zarr(
                 chunks_per_shard=per_shard,
             )
             sub = ObjectStore(open_store(f"{url}/{var}"))
-            _write_pyramid(pyr, sub, [var], methods, encoding, level_fn, conventions, url)
+            _write_pyramid(
+                pyr, sub, [var], methods, encoding, level_fn, conventions, url
+            )
     # Root attrs last: level-first's pyramid write populates root.attrs
     # (multiscales); merging keeps it while adding the dataset attrs.
     zarr.open_group(root, mode="r+").attrs.update(ds.attrs)

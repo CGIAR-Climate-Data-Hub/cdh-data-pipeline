@@ -58,6 +58,12 @@ def download_dataverse(doi, filenames, dest_dir, *, version=":latest", server=HA
     )
     files = json.load(req(listing))["data"]["files"]
     ids = {x["dataFile"]["filename"]: x["dataFile"]["id"] for x in files}
+    unavailable = [n for n in missing if n not in ids]
+    if unavailable:
+        raise RuntimeError(
+            f"Dataverse dataset {doi} version {version} is missing expected file(s): "
+            f"{', '.join(unavailable)}"
+        )
     for name in missing:
         print(f"  downloading {name}")
         # Guestbook-gated: POST an (empty) guestbook response -- name, email,
