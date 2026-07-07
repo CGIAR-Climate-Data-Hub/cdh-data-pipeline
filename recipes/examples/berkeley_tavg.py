@@ -1,12 +1,6 @@
-"""Berkeley Earth Complete_TAVG (monthly, 1deg global surface-temp anomaly) -> GeoZarr.
+"""Berkeley Earth Complete_TAVG example.
 
-This is a more complex example showing overviews + per level chunking strategies.
-  - level 0 (native, 360x180): point time-series chunks (full time in one chunk, tiny 4x4
-    tile, 25 shards) -> a warming-stripes read at a lat/lon is one ~100 KB chunk.
-  - levels 1,2 (/2, /4 overviews): one map frame per chunk -> a deck.gl-raster global map
-    reads a single tile per timestep.
-
-This also shows use of int16 + scale factor for better compression
+Shows multiscale levels, per-level chunking, and int16 scale/offset encoding.
 
 Run from the repo root: uv run recipes/examples/berkeley_tavg.py
 """
@@ -15,7 +9,7 @@ import urllib.request
 from pathlib import Path
 
 import numpy as np
-import rioxarray  # noqa: F401  registers .rio (write_crs)
+import rioxarray  # noqa: F401  registers .rio
 import xarray as xr
 from zarr.codecs import ZstdCodec
 from zarr.codecs.numcodecs import Shuffle
@@ -35,7 +29,7 @@ def fetch():
 
 
 def build_zarr():
-    # x/y dim names = rioxarray & topozarr convention
+    # rioxarray and topozarr expect x/y spatial dimensions.
     ds = xr.open_dataset(CACHE).rename(longitude="x", latitude="y")
     ds = ds.rio.set_spatial_dims(x_dim="x", y_dim="y").rio.write_crs("EPSG:4326")
     ds.attrs.update(
@@ -47,16 +41,17 @@ def build_zarr():
 
     codec = (Shuffle(elementsize=2), ZstdCodec(level=19))
     i16 = dict(dtype="int16", _FillValue=-32768, compressors=codec)
-    encoding = {  # per-variable; climatology is absolute degC -> wider 0.01 scale
+    encoding = {
         "temperature": {**i16, "scale_factor": np.float32(0.001)},
         "climatology": {**i16, "scale_factor": np.float32(0.01)},
     }
 
-    def chunking(var, level, sizes):  # per-level chunk/shard shapes
+    def chunking(var, level, sizes):
         yx = (sizes["y"], sizes["x"])
         if var == "climatology":
             return {"chunks": (sizes["month_number"], *yx) if level == 0 else (1, *yx)}
-        if level == 0:  # native res for point reads
+        # Native chunks optimize point time-series reads; overviews optimize map frames.
+        if level == 0:
             return {"chunks": (T, 4, 4), "shards": (T, 36, 72)}
         return {"chunks": (1, *yx), "shards": (T, *yx)}
 

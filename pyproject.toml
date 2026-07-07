@@ -5,16 +5,16 @@ description = "Shared plumbing + recipes for turning source datasets into ARCO z
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Brayden Youngberg", email = "bjyberg1@gmail.com" }]
-# floors = versions this was developed + tested against (uv.lock pins exact);
-# zarr>=3.2 is a hard requirement -- v3 sharding + BloscCodec + ObjectStore.
+# Lower bounds match tested versions in uv.lock.
+# zarr 3.2+ is required for v3 sharding, BloscCodec, and ObjectStore.
 dependencies = [
     "dask>=2025.1.0",
-    "geozarr-toolkit>=0.1.2,<0.2",  # pre-1.0 spec tool -> cap the minor
+    "geozarr-toolkit>=0.1.2,<0.2",  # pre-1.0; cap minor
     "obstore>=0.9.0",
     "rasterio>=1.4.0",
     "rioxarray>=0.18.0",
-    "topozarr>=0.1.2,<0.2",  # multiscale pyramids (Rust kernel); pre-1.0 -> cap the minor
-    "xproj>=0.1.0",  # CRS accessor topozarr reads (ds.proj.assign_crs)
+    "topozarr>=0.1.2,<0.2",  # multiscale pyramids; pre-1.0
+    "xproj>=0.1.0",  # CRS metadata for topozarr
     "xarray>=2025.1.0",
     "zarr>=3.2.0",
 ]
@@ -32,7 +32,7 @@ dev = [
 ]
 
 [tool.ruff.lint]
-extend-select = ["I"]  # import sorting
+extend-select = ["I"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["cdh_data_pipeline"]
