@@ -16,3 +16,6 @@ wheels/
 glw4/
 spam_ifpri/
 output/
+
+# Source data
+input/
