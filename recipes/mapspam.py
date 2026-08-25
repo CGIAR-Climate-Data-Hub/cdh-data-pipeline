@@ -162,7 +162,7 @@ def build_cogs():
                 list(CROPS),
                 units,
                 long_names=list(CROPS.values()),
-                interleave="BAND",
+                cog_options={"interleave": "BAND"},
             )
 
 

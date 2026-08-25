@@ -10,7 +10,8 @@ inspired by the pangeo forge pipeline.
 - `src/cdh_data_pipeline/` — the library (the boring, identical part)
   - `storage.py` — obstore store factory + source raster reading
   - `zarr.py` — zarr writing (compression codec + `write_zarr`)
-  - `cog.py` — COG conversion (`make_cog`, `COG_OPTS`)
+  - `cog.py` — COG conversion (`make_cog`, `write_cog`; pass `cog_options=`
+    to override GDAL creation options per call)
 - `recipes/` — one script per ingested dataset (the part that differs)
   - `glw4.py` — GLW4 livestock density
   - `mapspam.py` — MapSPAM 2020 V2r2 crop statistics
@@ -20,7 +21,7 @@ inspired by the pangeo forge pipeline.
     animated-map reads).
 
 A recipe imports the helpers, declares its own source mapping + dataset
-assembly, and calls `write_zarr` / `make_cog`. Adding a dataset = a new file in
+assembly, and calls `write_zarr` / `write_cog`. Adding a dataset = a new file in
 `recipes/` (or `recipes/examples/` for a demo that isn't ingested).
 
 ## Running
@@ -48,7 +49,7 @@ Copy `recipes/glw4.py` (the minimal example) and edit four things:
    set `title`/`source` attrs.
 3. **`build_zarr()` / `build_cogs()`** — call `write_zarr(ds, url, encoding)`
    (GeoZarr tagging + vlen string coords are handled for you) and
-   `make_cog(srcs, names, units)` per COG (pass 1-element lists for
+   `write_cog(url, srcs, names, units)` per COG (pass 1-element lists for
    single-band).
 4. **Entry point** — `run(build_zarr, build_cogs)`, prepending a `fetch` step if
    the source must be downloaded first.

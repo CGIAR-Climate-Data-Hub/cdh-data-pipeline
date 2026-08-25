@@ -5,13 +5,15 @@ from rasterio.io import MemoryFile
 
 from cdh_data_pipeline.storage import open_store
 
-COG_OPTS = dict(
+_COG_OPTS = dict(
     driver="COG",
     compress="ZSTD",
     level=22,
     predictor="YES",
     blocksize=512,
     bigtiff="IF_SAFER",
+    overview_resampling="average",
+    interleave="PIXEL",
 )
 
 
@@ -21,8 +23,7 @@ def make_cog(
     units,
     *,
     long_names=None,
-    overview_resampling="average",
-    interleave="PIXEL",
+    cog_options=None,
 ):
     """Build a COG in memory and return its bytes.
 
@@ -33,15 +34,16 @@ def make_cog(
     stable (e.g. crop codes); ``long_names`` adds a human-readable ``long_name``
     metadata tag per band.
 
-    ``interleave="BAND"`` keeps single-band reads cheap for multi-band COGs.
+    ``cog_options`` overrides individual GDAL creation options for this call,
+    e.g. ``{"interleave": "BAND"}`` to keep single-band reads cheap on a
+    multi-band COG.
     """
     with rasterio.open(srcs[0]) as s0:
         profile = {
             **s0.profile,
-            **COG_OPTS,
+            **_COG_OPTS,
+            **(cog_options or {}),
             "count": len(srcs),
-            "overview_resampling": overview_resampling,
-            "interleave": interleave,
         }
         for k in ("blockxsize", "blockysize", "tiled"):
             profile.pop(k, None)
