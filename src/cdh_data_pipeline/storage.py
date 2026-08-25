@@ -4,12 +4,22 @@ import json
 
 import rioxarray as rxr
 import xarray as xr
+from obstore.fsspec import FsspecStore
 from obstore.store import LocalStore, from_url
 
 
 def open_store(url):
     """Return an obstore store for a local path or URL."""
     return from_url(url) if "://" in url else LocalStore(url, mkdir=True)
+
+
+def open_fs(url):
+    """Return an fsspec filesystem for a URL, or None for a local path.
+
+    Same obstore backend and env-var credentials as open_store; pyarrow writers
+    want a filesystem rather than a store, and None lets them handle local paths.
+    """
+    return FsspecStore(url.split("://")[0]) if "://" in url else None
 
 
 def clear_store(store):

@@ -8,8 +8,9 @@ inspired by the pangeo forge pipeline.
 ## Layout
 
 - `src/cdh_data_pipeline/` — the library (the boring, identical part)
-  - `storage.py` — obstore store factory + source raster reading
+  - `storage.py` — obstore store/filesystem factories + source raster reading
   - `zarr.py` — zarr writing (compression codec + `write_zarr`)
+  - `parquet.py` — Parquet / GeoParquet 1.1 writing (`write_parquet`)
   - `cog.py` — COG conversion (`make_cog`, `write_cog`; pass `cog_options=`
     to override GDAL creation options per call)
 - `recipes/` — one script per ingested dataset (the part that differs)

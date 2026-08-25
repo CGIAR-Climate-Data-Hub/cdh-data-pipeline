@@ -9,8 +9,10 @@ authors = [{ name = "Brayden Youngberg", email = "bjyberg1@gmail.com" }]
 # zarr 3.2+ is required for v3 sharding, BloscCodec, and ObjectStore.
 dependencies = [
     "dask>=2025.1.0",
+    "geopandas>=1.0",  # GeoParquet 1.1: write_covering_bbox + hilbert_distance
     "geozarr-toolkit>=0.1.2,<0.2",  # pre-1.0; cap minor. Git-pinned, see [tool.uv.sources].
     "obstore>=0.9.0",
+    "pyarrow>=17.0",  # parquet writer backend
     "rasterio>=1.4.0",
     "rioxarray>=0.18.0",
     "topozarr>=0.1.5,<0.2",  # multiscale pyramids; pre-1.0
