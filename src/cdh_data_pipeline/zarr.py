@@ -76,9 +76,7 @@ def write_zarr(ds, url, encoding, *, consolidated=True):
     print(f"wrote {url} ({len(ds.data_vars)} vars)")
 
 
-def _write_pyramid(
-    pyr, target, variables, methods, encoding, level_fn, conventions, url
-):
+def _write_pyramid(pyr, target, variables, methods, encoding, level_fn, conventions):
     """Write one (possibly multi-variable) pyramid to ``target`` and stamp CRS attrs.
 
     Shared by both layouts: variable-first calls it once per variable into a
@@ -111,9 +109,7 @@ def _write_pyramid(
                 enc[k][v] = {**(encoding or {}).get(v, {}), **shapes}
         dt.to_zarr(target, mode="a", zarr_format=3, consolidated=False, encoding=enc)
     else:
-        # topozarr's Rust writer only supports S3 obstore targets.
-        io = "rust" if url.startswith("s3://") else "python"
-        pyr.write(target, mode="a", io=io)
+        pyr.write(target, mode="a")
     # GDAL/QGIS resolve the CRS from proj attrs on the array node itself;
     # topozarr only writes them on the variable group.
     grp = zarr.open_group(target, mode="r+")
@@ -211,9 +207,7 @@ def write_multiscale_zarr(
             method=next(iter(used_methods)),
             chunks_per_shard=per_shard,
         )
-        _write_pyramid(
-            pyr, root, variables, methods, encoding, level_fn, conventions, url
-        )
+        _write_pyramid(pyr, root, variables, methods, encoding, level_fn, conventions)
     else:
         for var in variables:
             pyr = create_pyramid(
@@ -223,9 +217,7 @@ def write_multiscale_zarr(
                 chunks_per_shard=per_shard,
             )
             sub = ObjectStore(open_store(f"{url}/{var}"))
-            _write_pyramid(
-                pyr, sub, [var], methods, encoding, level_fn, conventions, url
-            )
+            _write_pyramid(pyr, sub, [var], methods, encoding, level_fn, conventions)
     # Root attrs last: level-first's pyramid write populates root.attrs
     # (multiscales); merging keeps it while adding the dataset attrs.
     zarr.open_group(root, mode="r+").attrs.update(ds.attrs)
