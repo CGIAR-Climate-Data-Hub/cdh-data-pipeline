@@ -70,7 +70,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dask", specifier = ">=2025.1.0" },
-    { name = "geozarr-toolkit", specifier = ">=0.1.2,<0.2" },
+    { name = "geozarr-toolkit", git = "https://github.com/zarr-developers/geozarr-toolkit?rev=fb49f635d229d24ff4accbebbb0ca61098a606a4" },
     { name = "obstore", specifier = ">=0.9.0" },
     { name = "rasterio", specifier = ">=1.4.0" },
     { name = "rioxarray", specifier = ">=0.18.0" },
@@ -180,17 +180,13 @@ wheels = [
 
 [[package]]
 name = "geozarr-toolkit"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.3.dev1+gfb49f635d"
+source = { git = "https://github.com/zarr-developers/geozarr-toolkit?rev=fb49f635d229d24ff4accbebbb0ca61098a606a4#fb49f635d229d24ff4accbebbb0ca61098a606a4" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyproj" },
     { name = "structlog" },
     { name = "zarr" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/96/00/eb0acfacf70c23c26ec84730234657279645be24de289de1a865fcad8a7e/geozarr_toolkit-0.1.2.tar.gz", hash = "sha256:04b4196245210bfc854051729d0c3a92865bc47cf258f70227ae39a5ff40576b", size = 26324, upload-time = "2026-04-01T01:45:03.528Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6d/2b/fb54fdbad8041ca7ffa8332b29afd3697580c8884656540b7ab6a8c56096/geozarr_toolkit-0.1.2-py3-none-any.whl", hash = "sha256:6d4317b791da7fcb19fce9df345f8f9ee3a1a822eb3bb3aad448ec41b73b526e", size = 19719, upload-time = "2026-04-01T01:45:02.146Z" },
 ]
 
 [[package]]

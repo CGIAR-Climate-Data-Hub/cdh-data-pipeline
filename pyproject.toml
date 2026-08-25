@@ -9,7 +9,7 @@ authors = [{ name = "Brayden Youngberg", email = "bjyberg1@gmail.com" }]
 # zarr 3.2+ is required for v3 sharding, BloscCodec, and ObjectStore.
 dependencies = [
     "dask>=2025.1.0",
-    "geozarr-toolkit>=0.1.2,<0.2",  # pre-1.0; cap minor
+    "geozarr-toolkit>=0.1.2,<0.2",  # pre-1.0; cap minor. Git-pinned, see [tool.uv.sources].
     "obstore>=0.9.0",
     "rasterio>=1.4.0",
     "rioxarray>=0.18.0",
@@ -30,6 +30,12 @@ dev = [
     "ruff>=0.15.18",
     "ty>=0.0.52",
 ]
+
+[tool.uv.sources]
+# Released 0.1.2 writes convention schema_urls that 404: the proj repo was renamed
+# (zarr-experimental/geo-proj -> zarr-conventions/proj) and the tag is v0.1, not v1.
+# Fixed on main in #18 (2026-06-15), unreleased. Restore a plain version pin at 0.1.3.
+geozarr-toolkit = { git = "https://github.com/zarr-developers/geozarr-toolkit", rev = "fb49f635d229d24ff4accbebbb0ca61098a606a4" }
 
 [tool.ruff.lint]
 extend-select = ["I"]
