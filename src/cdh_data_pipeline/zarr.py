@@ -52,11 +52,15 @@ def _open_zarr_store(url):
     return store
 
 
-def write_zarr(ds, url, encoding, *, consolidated=True):
+def write_zarr(ds, url, encoding=None, *, consolidated=True):
     """Write a Dataset to an obstore-backed GeoZarr store.
 
     Each data variable receives GeoZarr attrs from rioxarray. Consolidated metadata
     makes cloud opens cheaper, but it is a zarr-python extension for v3 stores.
+
+    ``encoding`` maps variable name to Zarr encoding, e.g.
+    ``{"var": {"chunks": (1080, 1080), "compressors": (blosc_zstd(),)}}``.
+    Variables without a compressor use Zarr's native default codec.
     """
     store = _open_zarr_store(url)
     ds = _vlen_str_coords(ds)
@@ -127,7 +131,6 @@ def write_multiscale_zarr(
     *,
     methods=None,
     factors=None,
-    compressors=None,
     encoding=None,
     chunking=None,
     layout="variable",
@@ -151,10 +154,6 @@ def write_multiscale_zarr(
 
     ``factors`` gives cumulative downsampling factors. Factor 1 is added
     automatically if missing. If omitted, topozarr chooses a power-of-two pyramid.
-
-    ``compressors`` is a shortcut for applying the same Zarr codec tuple to all
-    variables. It is merged into ``encoding``; explicit per-variable ``encoding``
-    entries take precedence.
 
     ``encoding`` is a mapping of variable name to Zarr encoding and is applied to
     every level of that variable. Use it for settings that should not vary by
@@ -184,12 +183,6 @@ def write_multiscale_zarr(
             "chunking must be an int (N chunks/shard) or a callable "
             f"(var, level, sizes) -> {{'chunks':..,'shards':..}}; got {type(chunking).__name__}"
         )
-    # Shared codec shortcut; variable-specific encoding still wins.
-    if compressors is not None:
-        encoding = {
-            v: {"compressors": compressors, **(encoding or {}).get(v, {})}
-            for v in ds.data_vars
-        }
     ds = _vlen_str_coords(ds)
     # topozarr reads CRS from xproj metadata.
     ds = ds.proj.assign_crs(spatial_ref=ds.rio.crs.to_string(), allow_override=True)
