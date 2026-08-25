@@ -56,6 +56,9 @@ Copy `recipes/glw4.py` (the minimal example) and edit four things:
 No registration step — a recipe is just a runnable script that calls the shared
 helpers.
 
+Zarr outputs must use the conventional `.zarr` suffix so overwrite cleanup stays
+scoped to a store prefix.
+
 ## Credentials
 
 Credentials come from the **environment**

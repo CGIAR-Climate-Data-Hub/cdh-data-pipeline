@@ -149,8 +149,10 @@ def write_multiscale_zarr(
     per-variable methods. Mixed ``methods`` with ``layout="level"`` raises.
 
     ``methods`` maps variable names to downsampling methods: ``"mean"``, ``"sum"``,
-    ``"max"``, or ``"min"``. Unspecified variables use ``"mean"``. ``"sum"`` variables
-    use ``min_count=1`` so all-missing windows stay missing.
+    ``"max"``, ``"min"``, or ``"nearest"``. Unspecified variables use ``"mean"``.
+    ``"sum"`` variables use ``min_count=1`` so all-missing windows stay missing.
+    ``"nearest"`` subsamples instead of averaging, so use it for categorical
+    rasters and masks where an averaged class code would be meaningless.
 
     ``factors`` gives cumulative downsampling factors. Factor 1 is added
     automatically if missing. If omitted, topozarr chooses a power-of-two pyramid.
