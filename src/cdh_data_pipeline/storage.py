@@ -1,6 +1,7 @@
 """Object-store access and raster loading."""
 
 import json
+import os
 
 import rioxarray as rxr
 import xarray as xr
@@ -19,6 +20,7 @@ def open_fs(url):
     Same obstore backend and env-var credentials as open_store; pyarrow writers
     want a filesystem rather than a store, and None lets them handle local paths.
     """
+    url = os.fspath(url)
     return FsspecStore(url.split("://")[0]) if "://" in url else None
 
 
