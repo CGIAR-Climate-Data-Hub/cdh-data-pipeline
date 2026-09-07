@@ -39,6 +39,8 @@ def write_parquet(df, url, *, sort=True, **kwargs):
     opts = {"index": False, **_PARQUET_OPTS, **kwargs}
     if opts.get("compression") == "zstd":
         opts.setdefault("compression_level", 9)
+    if isinstance(sort, str):  # a bare name would iterate as characters
+        sort = [sort]
     keys = [] if sort is True else list(sort or [])
     if isinstance(df, gpd.GeoDataFrame):
         if "partition_cols" in opts:
