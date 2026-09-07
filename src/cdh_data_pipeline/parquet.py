@@ -3,6 +3,8 @@
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
+import pandas as pd
 
 from cdh_data_pipeline.storage import open_fs
 
@@ -52,9 +54,15 @@ def write_parquet(df, url, *, sort=True, **kwargs):
             geometry = df.geometry.name
 
             def sort_key(column):
-                if column.name == geometry:
-                    return gpd.GeoSeries(column, crs=df.crs).hilbert_distance()
-                return column
+                if column.name != geometry:
+                    return column
+                g = gpd.GeoSeries(column, crs=df.crs)
+                ok = ~(g.is_empty | g.isna())
+                # hilbert_distance rejects empty geometry; NaN sorts those rows last
+                out = pd.Series(np.nan, index=g.index)
+                if ok.any():
+                    out.loc[ok] = g[ok].hilbert_distance()
+                return out
 
             df = df.sort_values([*keys, geometry], key=sort_key)
         # required by write_covering_bbox; caller still wins
