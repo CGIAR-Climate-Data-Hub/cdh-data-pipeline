@@ -9,7 +9,6 @@ from cdh_data_pipeline.storage import open_fs
 # write_statistics is already True by default, so it is not repeated here.
 _PARQUET_OPTS = dict(
     compression="zstd",
-    compression_level=9,
     row_group_size=100_000,
     write_page_index=True,
 )
@@ -41,6 +40,8 @@ def write_parquet(df, url, *, sort=True, **kwargs):
     if fs is None:  # obstore mkdirs for zarr stores; pyarrow will not
         Path(url).parent.mkdir(parents=True, exist_ok=True)
     opts = {**_PARQUET_OPTS, **kwargs}
+    if opts.get("compression") == "zstd":
+        opts.setdefault("compression_level", 9)
     keys = [] if sort is True else list(sort or [])
     if isinstance(df, gpd.GeoDataFrame):
         if "partition_cols" in opts:
