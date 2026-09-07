@@ -48,6 +48,11 @@ cdh/data/<dataset-id>/
   catalog entry points at both as assets of one item. A parallel `cogs/`
   hierarchy would split each dataset across two prefixes and rot
   independently.
+- **Destinations are strings, not `Path`s.** Recipes build output urls by
+  interpolating a string prefix (`f"{OUTPUT}/cog/..."`). `pathlib` flattens
+  `s3://bucket` to `s3:/bucket`, which reads as a relative local path, so a
+  `Path` url would write to the wrong place. `Path` is for genuinely local
+  files only, such as a download cache.
 - **discuss:** should the zarr store name repeat the dataset id exactly?
   Today `glw4-2020/glw4-2020.zarr` does but
   `mapspam-2020-v2r2/spam2020-v2r2.zarr` doesn't. Proposal: yes, store name =
