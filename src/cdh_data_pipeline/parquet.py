@@ -14,9 +14,6 @@ _PARQUET_OPTS = dict(
 )
 
 
-_HILBERT = "__hilbert__"
-
-
 def write_parquet(df, url, *, sort=True, **kwargs):
     """Write a DataFrame to ``url`` as Parquet, or a GeoDataFrame as GeoParquet 1.1.
 
@@ -50,11 +47,14 @@ def write_parquet(df, url, *, sort=True, **kwargs):
                 "dataset. Partition by hand into one GeoParquet per prefix."
             )
         if sort is not False:
-            df = (
-                df.assign(**{_HILBERT: df.geometry.hilbert_distance()})
-                .sort_values([*keys, _HILBERT])
-                .drop(columns=_HILBERT)
-            )
+            geometry = df.geometry.name
+
+            def sort_key(column):
+                if column.name == geometry:
+                    return gpd.GeoSeries(column, crs=df.crs).hilbert_distance()
+                return column
+
+            df = df.sort_values([*keys, geometry], key=sort_key)
         # required by write_covering_bbox; caller still wins
         opts = {"schema_version": "1.1.0", "write_covering_bbox": True, **opts}
     elif keys:
