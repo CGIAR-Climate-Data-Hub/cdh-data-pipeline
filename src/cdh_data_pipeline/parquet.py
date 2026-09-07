@@ -36,7 +36,7 @@ def write_parquet(df, url, *, sort=True, **kwargs):
     fs = open_fs(url)
     if fs is None:  # obstore mkdirs for zarr stores; pyarrow will not
         Path(url).parent.mkdir(parents=True, exist_ok=True)
-    opts = {**_PARQUET_OPTS, **kwargs}
+    opts = {"index": False, **_PARQUET_OPTS, **kwargs}
     if opts.get("compression") == "zstd":
         opts.setdefault("compression_level", 9)
     keys = [] if sort is True else list(sort or [])
@@ -59,5 +59,5 @@ def write_parquet(df, url, *, sort=True, **kwargs):
         opts = {"schema_version": "1.1.0", "write_covering_bbox": True, **opts}
     elif keys:
         df = df.sort_values(keys)
-    df.to_parquet(url, index=False, filesystem=fs, **opts)
+    df.to_parquet(url, filesystem=fs, **opts)
     print(f"wrote {url} ({len(df)} rows)")
