@@ -1,6 +1,5 @@
 """Parquet / GeoParquet writer."""
 
-import os
 from pathlib import Path
 
 import geopandas as gpd
@@ -34,7 +33,6 @@ def write_parquet(df, url, *, sort=True, **kwargs):
     e.g. ``partition_cols`` for a hive layout. Hive is tabular-only: geopandas
     writes a single file and cannot partition.
     """
-    url = os.fspath(url)
     fs = open_fs(url)
     if fs is None:  # obstore mkdirs for zarr stores; pyarrow will not
         Path(url).parent.mkdir(parents=True, exist_ok=True)
