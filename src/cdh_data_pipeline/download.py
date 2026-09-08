@@ -13,6 +13,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from cdh_data_pipeline.recipe import log
+
 HARVARD = "https://dataverse.harvard.edu"
 UA = {"User-Agent": "cdh-data-pipeline"}
 
@@ -27,12 +29,13 @@ def download(url, dest):
     if dest.exists():
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
-    print(f"  downloading {dest.name}")
     part = dest.with_name(dest.name + ".part")
+    log.info("downloading %s", dest.name)
     with urllib.request.urlopen(urllib.request.Request(url, headers=UA)) as r:
         with open(part, "wb") as f:
             shutil.copyfileobj(r, f)
     part.rename(dest)
+    log.info("downloaded %s (%.0f MB)", dest.name, dest.stat().st_size / 1e6)
     return dest
 
 
@@ -75,7 +78,9 @@ def download_dataverse(doi, filenames, dest_dir, *, version=":latest", server=HA
     listing = (
         f"{server}/api/datasets/:persistentId/versions/{version}?persistentId={doi}"
     )
-    ids = {x["dataFile"]["filename"]: x["dataFile"]["id"] for x in api(listing)["files"]}
+    ids = {
+        x["dataFile"]["filename"]: x["dataFile"]["id"] for x in api(listing)["files"]
+    }
     unavailable = [n for n in missing if n not in ids]
     if unavailable:
         raise RuntimeError(

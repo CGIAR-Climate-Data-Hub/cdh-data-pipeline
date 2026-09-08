@@ -7,6 +7,8 @@ import xarray as xr
 from obstore.fsspec import FsspecStore
 from obstore.store import LocalStore, from_url
 
+from cdh_data_pipeline.recipe import log
+
 
 def open_store(url):
     """Return an obstore store for a local path or URL."""
@@ -34,7 +36,7 @@ def write_json(url, data):
     """Write a dict as JSON to a local path or object-store URL."""
     prefix, _, name = url.rpartition("/")
     open_store(prefix).put(name, json.dumps(data, indent=2).encode())
-    print(f"wrote {url}")
+    log.info("wrote %s", url)
 
 
 def open_raster(url, name=None, *, chunks=None):

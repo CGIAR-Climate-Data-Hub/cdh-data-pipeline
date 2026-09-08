@@ -3,6 +3,7 @@
 import rasterio
 from rasterio.io import MemoryFile
 
+from cdh_data_pipeline.recipe import log
 from cdh_data_pipeline.storage import open_store
 
 _COG_OPTS = dict(
@@ -64,5 +65,6 @@ def make_cog(
 def write_cog(url, srcs, descriptions, units, **kwargs):
     """Build a COG with :func:`make_cog` and write it to ``url``."""
     prefix, _, name = url.rpartition("/")
+    log.info("writing %s (%d bands)", url, len(srcs))
     open_store(prefix).put(name, make_cog(srcs, descriptions, units, **kwargs))
-    print(f"wrote {url} ({len(srcs)} bands)")
+    log.info("wrote %s", url)

@@ -13,6 +13,7 @@ from topozarr import create_pyramid
 from zarr.codecs import BloscCodec, BloscShuffle
 from zarr.storage import ObjectStore
 
+from cdh_data_pipeline.recipe import log
 from cdh_data_pipeline.storage import clear_store, open_store
 
 
@@ -70,6 +71,7 @@ def write_zarr(ds, url, encoding=None, *, consolidated=True):
     )
     for da in ds.data_vars.values():
         da.attrs.update(from_rioxarray(da), zarr_conventions=conventions)
+    log.info("writing %s (%d vars)", url, len(ds.data_vars))
     ds.to_zarr(
         ObjectStore(store),
         mode="w",
@@ -77,7 +79,7 @@ def write_zarr(ds, url, encoding=None, *, consolidated=True):
         consolidated=consolidated,
         encoding=encoding,
     )
-    print(f"wrote {url} ({len(ds.data_vars)} vars)")
+    log.info("wrote %s", url)
 
 
 def _write_pyramid(pyr, target, variables, methods, encoding, level_fn, conventions):
@@ -195,6 +197,7 @@ def write_multiscale_zarr(
         SpatialConventionMetadata(), ProjConventionMetadata()
     )
     variables = list(ds.data_vars)
+    log.info("writing %s (%d vars, multiscale, %s-first)", url, len(variables), layout)
     if layout == "level":
         pyr = create_pyramid(
             ds,
@@ -205,6 +208,7 @@ def write_multiscale_zarr(
         _write_pyramid(pyr, root, variables, methods, encoding, level_fn, conventions)
     else:
         for var in variables:
+            log.info("  pyramid %s", var)
             pyr = create_pyramid(
                 ds[[var]],
                 factors=factors,
@@ -217,4 +221,4 @@ def write_multiscale_zarr(
     # (multiscales); merging keeps it while adding the dataset attrs.
     zarr.open_group(root, mode="r+").attrs.update(ds.attrs)
     zarr.consolidate_metadata(root)
-    print(f"wrote {url} ({len(variables)} vars, multiscale, {layout}-first)")
+    log.info("wrote %s", url)
