@@ -5,16 +5,13 @@ Shows multiscale levels, per-level chunking, and int16 scale/offset encoding.
 Run from the repo root: uv run recipes/examples/berkeley_tavg.py
 """
 
-import urllib.request
-from pathlib import Path
-
 import numpy as np
 import rioxarray  # noqa: F401  registers .rio
 import xarray as xr
 from zarr.codecs import ZstdCodec
 from zarr.codecs.numcodecs import Shuffle
 
-from cdh_data_pipeline import run, write_multiscale_zarr
+from cdh_data_pipeline import download, run, write_multiscale_zarr
 
 SRC = "https://berkeley-earth-temperature.s3.us-west-1.amazonaws.com/Global/Gridded/Complete_TAVG_LatLong1.nc"
 CACHE = "input/Complete_TAVG_LatLong1.nc"
@@ -22,10 +19,7 @@ OUT = "output/examples/berkeley-tavg.zarr"
 
 
 def fetch():
-    if not Path(CACHE).exists():
-        Path(CACHE).parent.mkdir(exist_ok=True)
-        print(f"  downloading {SRC}")
-        urllib.request.urlretrieve(SRC, CACHE)
+    download(SRC, CACHE)
 
 
 def build_zarr():
