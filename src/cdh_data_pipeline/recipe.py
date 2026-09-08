@@ -10,19 +10,41 @@ import time
 log = logging.getLogger("cdh")
 
 
-def run(*builders):
-    """Run build steps with timing, flush output, then hard-exit.
+def _timed(name, step):
+    """Run one step, logging its name and elapsed time, also on failure."""
+    log.info("== %s", name)
+    t0 = time.monotonic()
+    try:
+        step()
+    except Exception:
+        log.exception("== %s failed after %.0fs", name, time.monotonic() - t0)
+        raise
+    log.info("== %s done in %.0fs", name, time.monotonic() - t0)
 
-    zarr v3 and obstore can leave noisy async teardown at interpreter shutdown.
+
+def _exit(code):
+    """Flush and hard-exit; skips zarr v3 / obstore's noisy async teardown."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
+def run(*builders):
+    """Run build steps in order; exit 1 on the first failure.
+
+    Step names on the command line select a subset, e.g.
+    ``uv run recipes/mapspam.py build_cogs`` re-runs only that step.
     """
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
     )
-    for build in builders:
-        log.info("== %s", build.__name__)
-        t0 = time.monotonic()
-        build()
-        log.info("== %s done in %.0fs", build.__name__, time.monotonic() - t0)
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(0)
+    steps = {b.__name__: b for b in builders}
+    names = sys.argv[1:] or list(steps)
+    if unknown := set(names) - steps.keys():
+        sys.exit(f"unknown step(s) {sorted(unknown)}; choose from {list(steps)}")
+    try:
+        for name in names:
+            _timed(name, steps[name])
+    except Exception:
+        _exit(1)
+    _exit(0)
