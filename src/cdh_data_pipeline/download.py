@@ -1,8 +1,9 @@
-"""Download source files from a Dataverse dataset (Harvard, IFPRI, etc.).
+"""Download source files into a local input cache.
 
-Handles the three quirks that trip up plain urllib against Dataverse: a WAF that
-403s the default Python user agent, guestbook-gated files (POST a guestbook
-response to get a signed URL), and streaming the bytes from that signed URL.
+``download`` covers plain URLs. ``download_dataverse`` handles the three quirks
+that trip up plain urllib against Dataverse: a WAF that 403s the default Python
+user agent, guestbook-gated files (POST a guestbook response to get a signed URL),
+and streaming the bytes from that signed URL.
 """
 
 import json
@@ -12,7 +13,30 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from cdh_data_pipeline.recipe import log
+
 HARVARD = "https://dataverse.harvard.edu"
+UA = {"User-Agent": "cdh-data-pipeline"}
+
+
+def download(url, dest):
+    """Download ``url`` to ``dest`` unless it already exists. Returns ``dest``.
+
+    Streams to ``dest.part`` and renames on completion so an interrupted download
+    is never mistaken for a complete file on the next run.
+    """
+    dest = Path(dest)
+    if dest.exists():
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    log.info("downloading %s", dest.name)
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA)) as r:
+        with open(part, "wb") as f:
+            shutil.copyfileobj(r, f)
+    part.rename(dest)
+    log.info("downloaded %s (%.0f MB)", dest.name, dest.stat().st_size / 1e6)
+    return dest
 
 
 def download_dataverse(doi, filenames, dest_dir, *, version=":latest", server=HARVARD):
@@ -24,7 +48,6 @@ def download_dataverse(doi, filenames, dest_dir, *, version=":latest", server=HA
     a Dataverse version such as ``"6.0"`` or ``":latest"``.
     """
     dest_dir = Path(dest_dir)
-    dest_dir.mkdir(parents=True, exist_ok=True)
     missing = [n for n in filenames if not (dest_dir / n).exists()]
     if not missing:
         return
@@ -36,19 +59,18 @@ def download_dataverse(doi, filenames, dest_dir, *, version=":latest", server=HA
             f"{len(missing)} file(s), or place them in {dest_dir}"
         )
 
-    def req(url, *, auth=False, body=None):
-        # The WAF 403s the default Python-urllib user agent. A JSON body makes it
-        # a POST; otherwise GET.
-        headers = {"User-Agent": "cdh-data-pipeline"}
+    def api(url, *, auth=False, body=None):
+        headers = dict(UA)
         if auth:
             headers["X-Dataverse-key"] = token
-        if body is not None:
+        if body is not None:  # a JSON body makes it a POST
             headers["Content-Type"] = "application/json"
             body = json.dumps(body).encode()
         try:
-            return urllib.request.urlopen(
+            with urllib.request.urlopen(
                 urllib.request.Request(url, headers=headers, data=body)
-            )
+            ) as r:
+                return json.load(r)["data"]
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Dataverse HTTP {e.code} for {url}: {detail}") from e
@@ -56,8 +78,9 @@ def download_dataverse(doi, filenames, dest_dir, *, version=":latest", server=HA
     listing = (
         f"{server}/api/datasets/:persistentId/versions/{version}?persistentId={doi}"
     )
-    files = json.load(req(listing))["data"]["files"]
-    ids = {x["dataFile"]["filename"]: x["dataFile"]["id"] for x in files}
+    ids = {
+        x["dataFile"]["filename"]: x["dataFile"]["id"] for x in api(listing)["files"]
+    }
     unavailable = [n for n in missing if n not in ids]
     if unavailable:
         raise RuntimeError(
@@ -65,11 +88,9 @@ def download_dataverse(doi, filenames, dest_dir, *, version=":latest", server=HA
             f"{', '.join(unavailable)}"
         )
     for name in missing:
-        print(f"  downloading {name}")
         # Guestbook-gated: POST an (empty) guestbook response -- name, email,
         # institution default to the token's account -- to get a signed, tokened
-        # URL, then stream the bytes from it (that URL needs no auth header).
+        # URL that needs no auth header.
         access = f"{server}/api/access/datafile/{ids[name]}"
-        signed = json.load(req(access, auth=True, body={"guestbookResponse": {}}))
-        with req(signed["data"]["signedUrl"]) as r, open(dest_dir / name, "wb") as f:
-            shutil.copyfileobj(r, f)
+        signed = api(access, auth=True, body={"guestbookResponse": {}})["signedUrl"]
+        download(signed, dest_dir / name)

@@ -6,6 +6,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
+from cdh_data_pipeline.recipe import log
 from cdh_data_pipeline.storage import open_fs
 
 # write_statistics is already True by default, so it is not repeated here.
@@ -69,5 +70,6 @@ def write_parquet(df, url, *, sort=True, **kwargs):
         opts = {"schema_version": "1.1.0", "write_covering_bbox": True, **opts}
     elif keys:
         df = df.sort_values(keys)
+    log.info("writing %s (%d rows)", url, len(df))
     df.to_parquet(url, filesystem=fs, **opts)
-    print(f"wrote {url} ({len(df)} rows)")
+    log.info("wrote %s", url)
