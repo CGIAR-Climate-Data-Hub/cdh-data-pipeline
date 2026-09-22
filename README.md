@@ -26,6 +26,9 @@ Pangeo Forge.
 - `recipes/`: one script per ingested dataset
   - `glw4.py`: GLW4 livestock density
   - `mapspam.py`: MapSPAM 2020 V2r2 crop statistics
+  - `jrc_glofas.py`: JRC GloFAS flood hazard maps. Indexes the upstream tiled
+    COGs in place as STAC GeoParquet per collection plus `depth.vrt` and
+    `hazard.vrt` with return period as bands; no data is copied
   - `wb_boundaries.py`: World Bank Official Boundaries (admin 0 to 2 and ocean
     mask) as GeoParquet, plus the admin 1 and 2 attribute tables. Admin 0
     includes the disputed NDLSA areas. Filter on `wb_status`.
