@@ -16,6 +16,8 @@ Pangeo Forge.
     reading
   - `zarr.py`: zarr writing (compression codec and `write_zarr`)
   - `parquet.py`: Parquet and GeoParquet 1.1 writing (`write_parquet`)
+  - `stac.py`: static STAC collections (`read_stac_collection`) and STAC
+    GeoParquet snapshots (`write_stac_geoparquet`)
   - `cog.py`: COG conversion (`make_cog`, `write_cog`). Pass `cog_options=` to
     override GDAL creation options for a call.
 - `recipes/`: one script per ingested dataset
