@@ -18,6 +18,9 @@ Pangeo Forge.
   - `parquet.py`: Parquet and GeoParquet 1.1 writing (`write_parquet`)
   - `stac.py`: static STAC collections (`read_stac_collection`) and STAC
     GeoParquet snapshots (`write_stac_geoparquet`)
+  - `mosaic.py`: virtual mosaics over tiles described by STAC items or raster
+    paths, nothing copied: `write_vrt` (one band per tile set) and `write_gti`
+    (GDAL tile index, for large tile counts)
   - `cog.py`: COG conversion (`make_cog`, `write_cog`). Pass `cog_options=` to
     override GDAL creation options for a call.
 - `recipes/`: one script per ingested dataset
