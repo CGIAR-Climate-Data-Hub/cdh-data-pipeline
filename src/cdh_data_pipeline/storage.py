@@ -16,12 +16,12 @@ def open_store(url):
 
 
 def open_fs(url):
-    """Return an fsspec filesystem for a URL, or None for a local path.
+    """Return an obstore-backed fsspec filesystem for a local path or URL.
 
-    Same obstore backend and env-var credentials as open_store; pyarrow writers
-    want a filesystem rather than a store, and None lets them handle local paths.
+    pyarrow writers want a filesystem rather than a store. Unlike plain local
+    writes, it creates missing parent directories.
     """
-    return FsspecStore(url.split("://")[0]) if "://" in url else None
+    return FsspecStore(url.split("://")[0] if "://" in url else "file")
 
 
 def clear_store(store):

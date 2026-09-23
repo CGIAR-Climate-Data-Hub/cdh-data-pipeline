@@ -1,7 +1,5 @@
 """Parquet / GeoParquet writer."""
 
-from pathlib import Path
-
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -37,8 +35,6 @@ def write_parquet(df, url, *, sort=True, **kwargs):
     writes a single file and cannot partition.
     """
     fs = open_fs(url)
-    if fs is None:  # obstore mkdirs for zarr stores; pyarrow will not
-        Path(url).parent.mkdir(parents=True, exist_ok=True)
     opts = {"index": False, **_PARQUET_OPTS, **kwargs}
     if opts.get("compression") == "zstd":
         opts.setdefault("compression_level", 9)
