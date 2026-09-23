@@ -31,9 +31,9 @@ def download(url, dest):
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(dest.name + ".part")
     log.info("downloading %s", dest.name)
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA)) as r:
-        with open(part, "wb") as f:
-            shutil.copyfileobj(r, f)
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req) as r, open(part, "wb") as f:
+        shutil.copyfileobj(r, f)
     part.rename(dest)
     log.info("downloaded %s (%.0f MB)", dest.name, dest.stat().st_size / 1e6)
     return dest

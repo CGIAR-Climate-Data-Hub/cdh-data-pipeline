@@ -45,6 +45,6 @@ def run(*builders):
     try:
         for name in names:
             _timed(name, steps[name])
-    except Exception:
+    except Exception:  # noqa: BLE001  _timed already logged it
         _exit(1)
     _exit(0)

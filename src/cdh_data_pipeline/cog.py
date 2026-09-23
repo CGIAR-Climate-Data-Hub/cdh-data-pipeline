@@ -6,17 +6,17 @@ from rasterio.io import MemoryFile
 from cdh_data_pipeline.recipe import log
 from cdh_data_pipeline.storage import open_store
 
-_COG_OPTS = dict(
-    driver="COG",
-    compress="ZSTD",
-    level=9,
-    predictor="YES",
-    blocksize=512,
-    num_threads="ALL_CPUS",
-    bigtiff="IF_SAFER",
-    overview_resampling="average",
-    interleave="PIXEL",
-)
+_COG_OPTS = {
+    "driver": "COG",
+    "compress": "ZSTD",
+    "level": 9,
+    "predictor": "YES",
+    "blocksize": 512,
+    "num_threads": "ALL_CPUS",
+    "bigtiff": "IF_SAFER",
+    "overview_resampling": "average",
+    "interleave": "PIXEL",
+}
 
 
 def make_cog(

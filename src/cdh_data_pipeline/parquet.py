@@ -10,11 +10,11 @@ from cdh_data_pipeline.recipe import log
 from cdh_data_pipeline.storage import open_fs
 
 # write_statistics is already True by default, so it is not repeated here.
-_PARQUET_OPTS = dict(
-    compression="zstd",
-    row_group_size=100_000,
-    write_page_index=True,
-)
+_PARQUET_OPTS = {
+    "compression": "zstd",
+    "row_group_size": 100_000,
+    "write_page_index": True,
+}
 
 
 def write_parquet(df, url, *, sort=True, **kwargs):
