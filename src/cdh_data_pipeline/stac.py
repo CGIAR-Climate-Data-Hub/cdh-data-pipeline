@@ -1,8 +1,4 @@
-"""Static STAC collections: read them, snapshot them as STAC GeoParquet.
-
-Items come back as plain dicts so a recipe can normalise upstream metadata before
-writing, and hand them to ``mosaic.write_vrt`` / ``write_gti`` unchanged.
-"""
+"""Read static STAC collections and write them as STAC GeoParquet."""
 
 import asyncio
 import logging
@@ -13,21 +9,20 @@ import rustac
 from cdh_data_pipeline.recipe import log
 from cdh_data_pipeline.storage import open_store
 
-# rustac logs one INFO line per object read; that is per tile here.
+# rustac logs an INFO line per item read
 logging.getLogger("stac_io").setLevel(logging.WARNING)
 
-# urljoin only resolves relative hrefs for schemes it knows; teach it object stores.
+# let urljoin resolve relative hrefs under object-store URLs
 for _scheme in ("s3", "gs", "az", "abfs"):
     parse.uses_relative.append(_scheme)
     parse.uses_netloc.append(_scheme)
 
 
 def read_stac_collection(url):
-    """Read a static STAC collection and its items, all links and hrefs made absolute.
+    """Return ``(collection, items)`` as dicts, with all hrefs made absolute.
 
-    Credentials come from the environment; set
-    ``AWS_SKIP_SIGNATURE=true`` for public buckets. Asset hrefs are resolved
-    against ``url``, so pass HTTPS for public data if readers should need no setup.
+    Hrefs resolve against ``url``, so use an HTTPS URL for public data to keep
+    them credential-free. Set ``AWS_SKIP_SIGNATURE=true`` for public S3 buckets.
     """
     return asyncio.run(_read(url))
 
@@ -48,7 +43,7 @@ async def _read(collection_url):
 
 
 def _absolutize(obj, href):
-    """Resolve an item's or collection's links and assets against where it was read."""
+    """Resolve link and asset hrefs against ``href``."""
     for link in obj["links"]:
         link["href"] = parse.urljoin(href, link["href"])
     for asset in obj.get("assets", {}).values():
@@ -56,11 +51,9 @@ def _absolutize(obj, href):
 
 
 def write_stac_geoparquet(collection, items, url):
-    """Write one collection's items as a STAC GeoParquet file at ``url``.
+    """Write items as STAC GeoParquet at ``url``, collection JSON in the metadata.
 
-    rustac writes spec 1.0: WKB geometry, bbox covering column, collection JSON in
-    the file metadata. STAC tools see a collection snapshot; GDAL 3.10+ with the
-    Parquet driver also opens it as a mosaic via ``GTI:<url>``.
+    GDAL 3.10+ can also open it as a mosaic via ``GTI:<url>``.
     """
     asyncio.run(_write_parquet(collection, items, url))
 

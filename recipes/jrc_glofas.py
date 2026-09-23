@@ -1,15 +1,13 @@
-"""JRC GloFAS global flood hazard maps -> STAC GeoParquet + VRT mosaics.
+"""JRC GloFAS flood hazard maps -> STAC GeoParquet + VRT mosaics.
 
-The source is already tiled COGs with a static STAC catalog on source.coop. We do
-not copy the data. Each collection becomes a STAC GeoParquet snapshot, and the
-tiles are exposed as VRT mosaics with return period as the band axis:
-``<OUTPUT>/depth.vrt`` (7 bands, rp10..rp500) and ``<OUTPUT>/hazard.vrt``.
+Indexes the upstream COGs on source.coop in place; nothing is copied. Writes one
+GeoParquet per collection, plus ``depth.vrt`` and ``hazard.vrt`` with one band
+per return period (rp10..rp500).
 
-``depth-*`` is flood depth in metres (float32). ``hazard-*`` is the publisher's
-three-class reclassification of depth (uint8); the class breaks are not documented.
+``depth`` is flood depth in metres (float32). ``hazard`` is a 3-class version of
+depth (uint8); the class breaks are undocumented.
 
-INPUT is the HTTPS mirror on purpose: asset hrefs are written as read from the
-collection, so HTTPS gives readers ``/vsicurl`` paths that need no AWS setup.
+INPUT is HTTPS so the written hrefs need no AWS credentials.
 
 Run from the repo root: uv run recipes/jrc_glofas.py
 """
@@ -30,10 +28,7 @@ SINGLE = ("permanent-water", "spurious-depths")  # auxiliary masks, one VRT each
 
 
 def fix_transform(item):
-    """Upstream bug: proj:transform is in GDAL order [x0, dx, 0, y0, 0, dy].
-
-    STAC (and GDAL's STACIT driver) want affine order [dx, 0, x0, 0, dy, y0].
-    """
+    """Reorder upstream proj:transform from GDAL order to the affine order STAC uses."""
     t = item["properties"]["proj:transform"]
     if t[2] == 0 and t[4] == 0 and t[1] != 0:
         item["properties"]["proj:transform"] = [t[1], t[2], t[0], t[4], t[5], t[3]]

@@ -1,8 +1,6 @@
-"""Virtual mosaics over tiled rasters: VRT (band per tile set) and GDAL tile index.
+"""VRT and GTI (GDAL tile index) mosaics that reference tiles in place.
 
-Tiles are described either by STAC items or by raster paths/URLs. Items are laid
-out from their ``proj:`` metadata without opening a file; paths are opened once.
-Nothing is copied, the outputs reference the tiles in place.
+Tiles are STAC items (laid out from ``proj:`` metadata) or raster paths/URLs.
 """
 
 import json
@@ -21,9 +19,9 @@ from shapely.geometry import box, shape
 from cdh_data_pipeline.recipe import log
 from cdh_data_pipeline.storage import put_file
 
-# GDAL virtual filesystem prefix per URL scheme; GTI/VRT need paths GDAL can open.
+# URL scheme -> GDAL virtual filesystem prefix
 _VSI = {"s3": "/vsis3/", "gs": "/vsigs/", "az": "/vsiaz/", "abfs": "/vsiaz/"}
-# numpy dtype names -> GDAL names, for the GTI layer metadata.
+# numpy dtype names -> GDAL names, for the GTI layer metadata
 _GDAL_TYPE = {
     "int8": "Int8",
     "uint8": "Byte",
@@ -39,18 +37,10 @@ _GDAL_TYPE = {
 def write_vrt(url, bands, *, asset="data"):
     """Write a VRT at ``url`` with one band per entry of ``bands``.
 
-    ``bands`` maps band name to that band's source: one raster path/URL (stacked
-    as is, e.g. one file per year), a list of raster paths/URLs (mosaicked, each
-    opened once by rio-vrt), or a list of STAC items (mosaicked by GDAL's STACIT
-    driver from ``proj:`` metadata, no file opened). Mosaics are written as
-    ``<stem>-<band>.vrt`` siblings and the bands stacked on top; a single tile set
-    writes just that mosaic at ``url``.
-
-    Sources must share pixel size, data type and nodata; mismatches raise rather
-    than being silently misplaced, recast or unmasked. Any GDAL 2+ reader opens the
-    result and sees the tiles' overview levels as virtual overviews. HTTPS tile
-    locations disable sidecar probing (~15 requests per tile on servers without
-    directory listings).
+    ``bands`` maps band name to a source: one raster path/URL, a list of them,
+    or a list of STAC items. Lists are mosaicked into ``<stem>-<band>.vrt``
+    siblings that the main VRT stacks. Sources must share resolution, dtype and
+    nodata, or this raises.
     """
     prefix, _, name = url.rpartition("/")
     sources = {
@@ -61,7 +51,7 @@ def write_vrt(url, bands, *, asset="data"):
     lone = all(isinstance(src, (str, Path)) for src in bands.values())
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp, name)
-        if lone:  # one raster per band: stack them as they are, no sibling files
+        if lone:  # one raster per band: stack directly, no siblings
             _build_vrt(
                 out,
                 [_vsi(str(srcs[0])) for srcs in sources.values()],
@@ -89,7 +79,7 @@ def write_vrt(url, bands, *, asset="data"):
 
 
 def _stacit_to_vrt(items, asset, out):
-    """Mosaic one asset across STAC items via STACIT and serialise it as a VRT."""
+    """Mosaic ``asset`` across STAC items with GDAL's STACIT driver, saved as VRT."""
     features = [
         {
             **i,
@@ -107,14 +97,17 @@ def _stacit_to_vrt(items, asset, out):
 
 
 def _build_vrt(out, sources, *, mosaic, relative=False, names=None):
-    """rio-vrt mosaic or stack; it assumes square pixels and drops nodata, so fix both."""
+    """Mosaic or stack ``sources`` with rio-vrt.
+
+    rio-vrt assumes square pixels and drops nodata, so pass ``res`` and fix after.
+    """
     tiles = [_probe(src) for src in sources]
-    if len(sources) == 1:  # rio-vrt crashes on a single input; wrap it directly
+    if len(sources) == 1:  # rio-vrt crashes on a single input
         with rasterio.open(sources[0]) as raster:
             rio_copy(raster, out, driver="VRT")
     else:
         for src, tile in zip(sources[1:], tiles[1:]):
-            for key in ("res", "dtype", "nodata"):  # the VRT carries one of each
+            for key in ("res", "dtype", "nodata"):
                 if not _same(key, tile[key], tiles[0][key]):
                     raise ValueError(
                         f"{src}: {key} {tile[key]} differs from {sources[0]}: {tiles[0][key]}"
@@ -130,7 +123,7 @@ def _build_vrt(out, sources, *, mosaic, relative=False, names=None):
 
 
 def _same(key, a, b):
-    """Resolution tolerates float noise; nodata is a sentinel and must match exactly."""
+    """Compare tile properties; res allows float noise, NaN nodata matches NaN."""
     if key == "res":
         return all(math.isclose(x, y, rel_tol=1e-9) for x, y in zip(a, b))
     if key == "nodata" and isinstance(a, float) and isinstance(b, float):
@@ -139,7 +132,7 @@ def _same(key, a, b):
 
 
 def _probe(source):
-    """Open one tile (or VRT) once for what the mosaic must inherit from it."""
+    """Read the raster properties a mosaic inherits from its first tile."""
     with rasterio.open(source) as src:
         return {
             "res": src.res,
@@ -152,11 +145,9 @@ def _probe(source):
 
 
 def _finish_vrt(out, tile, names=None):
-    """Set what the builders drop, and advertise the tiles' overview levels virtually.
+    """Restore nodata and band names, and add virtual overviews.
 
-    Virtual overviews store nothing: GDAL reads the sources at reduced resolution,
-    which in turn hit the COGs' internal overviews. They make the levels visible
-    to readers that ask (QGIS, tile servers, ``vrt://...?ovr=N``).
+    Virtual overviews store nothing; reads fall through to the COGs' overviews.
     """
     resampling = (
         Resampling.average if tile["dtype"].startswith("Float") else Resampling.nearest
@@ -171,14 +162,10 @@ def _finish_vrt(out, tile, names=None):
 
 
 def write_gti(url, tiles, *, asset="data"):
-    """Write a GDAL tile index (GeoPackage) at ``url`` over ``tiles``.
+    """Write a GTI GeoPackage at ``url`` over STAC items or raster paths/URLs.
 
-    ``tiles`` are STAC items (footprints from metadata) or raster paths/URLs (each
-    opened once for its bounds). Every GDAL 3.8+ opens the result as a mosaic via
-    ``GTI:<url>``, rasterio wheels included. The layer carries the tiles' CRS,
-    raster metadata and overview levels so GDAL neither warps nor probes a tile on
-    open. Prefer ``write_vrt`` unless the tile count needs GTI's spatial index or
-    the footprint layer itself is wanted.
+    Open with ``GTI:<url>`` (GDAL 3.8+). Prefer ``write_vrt`` unless you have
+    many tiles or need the footprint layer.
     """
     _check_publishable(url, tiles, asset)
     df = (
@@ -188,6 +175,7 @@ def write_gti(url, tiles, *, asset="data"):
     )
     tile = _probe(df.location.iloc[0])
     df = df.to_crs(tile["crs"])
+    # stops GDAL warping or opening tiles on open
     meta = {
         "SRS": tile["crs"].to_string(),
         "RESX": str(tile["res"][0]),
@@ -197,10 +185,9 @@ def write_gti(url, tiles, *, asset="data"):
     }
     if tile["nodata"] is not None:
         meta["NODATA"] = str(tile["nodata"])
-    # virtual overview levels, read through the tiles' own overviews
     for i, factor in enumerate(tile["overviews"]):
         meta[f"OVERVIEW_{i}_FACTOR"] = str(factor)
-    # GPKG is sqlite: write locally, then put
+    # GPKG is SQLite, so write locally then upload
     with tempfile.TemporaryDirectory() as tmp:
         local = Path(tmp, url.rpartition("/")[2])
         df.to_file(local, driver="GPKG", layer_metadata=meta)
@@ -236,7 +223,7 @@ def _footprints_from_files(paths):
 
 
 def _check_publishable(url, sources, asset):
-    """A mosaic in object storage must not point at files that exist only here."""
+    """Raise if a remote mosaic would reference local files."""
     if "://" not in url:
         return
     for source in sources:
@@ -248,10 +235,11 @@ def _check_publishable(url, sources, asset):
 
 
 def _vsi(href):
-    """Location string GDAL can open from anywhere: absolute local path or /vsi path."""
+    """Convert a URL or path to a GDAL path (/vsi prefix or absolute path)."""
     scheme, sep, rest = href.partition("://")
     if not sep:
         return href if href.startswith("/vsi") else str(Path(href).resolve())
     if scheme in ("http", "https"):
+        # empty_dir=yes skips sidecar probing, ~15 requests per tile
         return f"/vsicurl?empty_dir=yes&url={href}"
-    return _VSI[scheme] + rest if scheme in _VSI else href  # GDAL strings pass through
+    return _VSI[scheme] + rest if scheme in _VSI else href
