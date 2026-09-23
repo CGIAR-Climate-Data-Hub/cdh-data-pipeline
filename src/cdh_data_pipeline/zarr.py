@@ -3,13 +3,7 @@
 import rioxarray  # noqa: F401  registers .rio
 import xproj  # noqa: F401  registers .proj
 import zarr
-from geozarr_toolkit import (
-    ProjConventionMetadata,
-    SpatialConventionMetadata,
-    create_zarr_conventions,
-    from_rioxarray,
-)
-from topozarr import create_pyramid
+from topozarr import attach_geozarr_metadata, create_pyramid
 from zarr.codecs import BloscCodec
 from zarr.storage import ObjectStore
 
@@ -44,6 +38,12 @@ def _replace_sum_levels(dt, var, factors):
         dt[str(lvl)][var] = prev.assign_attrs(dt[str(lvl)][var].attrs)
 
 
+def _geozarr_attrs(da, crs):
+    """GeoZarr proj + spatial convention attrs for one array."""
+    # geozarr-toolkit 0.1.2 writes 404 convention URLs; revisit once 0.1.3 ships.
+    return attach_geozarr_metadata(da.to_dataset(), crs=crs).attrs
+
+
 def _open_zarr_store(url):
     """Open a zarr store after clearing an existing .zarr prefix."""
     if not url.rstrip("/").endswith(".zarr"):
@@ -56,7 +56,7 @@ def _open_zarr_store(url):
 def write_zarr(ds, url, encoding=None, *, consolidated=True):
     """Write a Dataset to an obstore-backed GeoZarr store.
 
-    Each data variable receives GeoZarr attrs from rioxarray. Consolidated metadata
+    Each data variable receives GeoZarr proj + spatial attrs. Consolidated metadata
     makes cloud opens cheaper, but it is a zarr-python extension for v3 stores.
 
     ``encoding`` maps variable name to Zarr encoding, e.g.
@@ -66,11 +66,9 @@ def write_zarr(ds, url, encoding=None, *, consolidated=True):
     store = _open_zarr_store(url)
     ds = _vlen_str_coords(ds)
 
-    conventions = create_zarr_conventions(
-        SpatialConventionMetadata(), ProjConventionMetadata()
-    )
+    crs = ds.rio.crs.to_string()
     for da in ds.data_vars.values():
-        da.attrs.update(from_rioxarray(da), zarr_conventions=conventions)
+        da.attrs.update(_geozarr_attrs(da, crs))
     log.info("writing %s (%d vars)", url, len(ds.data_vars))
     ds.to_zarr(
         ObjectStore(store),
@@ -82,7 +80,7 @@ def write_zarr(ds, url, encoding=None, *, consolidated=True):
     log.info("wrote %s", url)
 
 
-def _write_pyramid(pyr, target, variables, methods, encoding, level_fn, conventions):
+def _write_pyramid(pyr, target, variables, methods, encoding, level_fn, crs):
     """Write one (possibly multi-variable) pyramid to ``target`` and stamp CRS attrs.
 
     Shared by both layouts: variable-first calls it once per variable into a
@@ -122,9 +120,7 @@ def _write_pyramid(pyr, target, variables, methods, encoding, level_fn, conventi
     for k in pyr.encoding:
         name = k.strip("/")
         for v in variables:
-            grp[f"{name}/{v}"].attrs.update(
-                from_rioxarray(dt[name][v]), zarr_conventions=conventions
-            )
+            grp[f"{name}/{v}"].attrs.update(_geozarr_attrs(dt[name][v], crs))
 
 
 def write_multiscale_zarr(
@@ -188,13 +184,11 @@ def write_multiscale_zarr(
         )
     ds = _vlen_str_coords(ds)
     # topozarr reads CRS from xproj metadata.
-    ds = ds.proj.assign_crs(spatial_ref=ds.rio.crs.to_string(), allow_override=True)
+    crs = ds.rio.crs.to_string()
+    ds = ds.proj.assign_crs(spatial_ref=crs, allow_override=True)
     store = _open_zarr_store(url)
     root = ObjectStore(store)
     zarr.open_group(root, mode="w")
-    conventions = create_zarr_conventions(
-        SpatialConventionMetadata(), ProjConventionMetadata()
-    )
     variables = list(ds.data_vars)
     log.info("writing %s (%d vars, multiscale, %s-first)", url, len(variables), layout)
     if layout == "level":
@@ -204,7 +198,7 @@ def write_multiscale_zarr(
             method=next(iter(used_methods)),
             chunks_per_shard=per_shard,
         )
-        _write_pyramid(pyr, root, variables, methods, encoding, level_fn, conventions)
+        _write_pyramid(pyr, root, variables, methods, encoding, level_fn, crs)
     else:
         for var in variables:
             log.info("  pyramid %s", var)
@@ -215,7 +209,7 @@ def write_multiscale_zarr(
                 chunks_per_shard=per_shard,
             )
             sub = ObjectStore(open_store(f"{url}/{var}"))
-            _write_pyramid(pyr, sub, [var], methods, encoding, level_fn, conventions)
+            _write_pyramid(pyr, sub, [var], methods, encoding, level_fn, crs)
     # Root attrs last: level-first's pyramid write populates root.attrs
     # (multiscales); merging keeps it while adding the dataset attrs.
     zarr.open_group(root, mode="r+").attrs.update(ds.attrs)

@@ -9,12 +9,11 @@ authors = [{ name = "Brayden Youngberg", email = "bjyberg1@gmail.com" }]
 dependencies = [
     "dask>=2026.8.0",
     "geopandas>=1.1.4",  # GeoParquet 1.1: write_covering_bbox + hilbert_distance
-    "geozarr-toolkit>=0.1.2,<0.2",  # pre-1.0; cap minor. Git-pinned, see [tool.uv.sources].
     "obstore>=0.11.1",
     "pyarrow>=25.0.1",  # parquet writer backend
     "rasterio>=1.5.1",
     "rioxarray>=0.23.0",
-    "topozarr>=0.1.9,<0.2",  # multiscale pyramids; pre-1.0
+    "topozarr>=0.1.9,<0.2",  # multiscale pyramids + GeoZarr attrs; pre-1.0
     "xproj>=0.2.1",  # CRS metadata for topozarr
     "xarray>=2026.7.0",
     "zarr>=3.4.0",
@@ -31,12 +30,6 @@ dev = [
     "ruff>=0.16.8",
     "ty>=0.0.83",
 ]
-
-[tool.uv.sources]
-# Released 0.1.2 writes convention schema_urls that 404: the proj repo was renamed
-# (zarr-experimental/geo-proj -> zarr-conventions/proj) and the tag is v0.1, not v1.
-# Fixed on main in #18 (2026-06-15), unreleased. Restore a plain version pin at 0.1.3.
-geozarr-toolkit = { git = "https://github.com/zarr-developers/geozarr-toolkit", rev = "fb49f635d229d24ff4accbebbb0ca61098a606a4" }
 
 [tool.ruff.lint]
 extend-select = ["I"]
