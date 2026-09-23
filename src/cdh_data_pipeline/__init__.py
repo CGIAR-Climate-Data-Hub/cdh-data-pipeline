@@ -26,5 +26,6 @@ __all__ = [
     "write_stac_geoparquet",
     "write_vrt",
     "write_multiscale_zarr",
+    "write_parquet",
     "write_zarr",
 ]

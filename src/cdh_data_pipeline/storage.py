@@ -17,12 +17,8 @@ def open_store(url):
 
 
 def open_fs(url):
-    """Return an fsspec filesystem for a URL, or None for a local path.
-
-    Same obstore backend and env-var credentials as open_store; pyarrow writers
-    want a filesystem rather than a store, and None lets them handle local paths.
-    """
-    return FsspecStore(url.split("://")[0]) if "://" in url else None
+    """Return an fsspec filesystem for a local path or URL, for pyarrow writers."""
+    return FsspecStore(url.split("://")[0] if "://" in url else "file")
 
 
 def clear_store(store):
@@ -47,11 +43,10 @@ def put_file(url, path):
 
 
 def open_raster(url, name=None, *, chunks=None):
-    """Read a single-band raster as float32 with nodata mapped to NaN.
+    """Read a raster as float32, nodata as NaN, attrs cleared.
 
-    ``chunks=None`` loads eagerly. ``chunks=-1`` keeps one lazy Dask chunk per raster,
-    useful when a recipe stacks many layers before writing.
-    Source attrs are cleared; recipes set normalized metadata.
+    Single-band rasters drop the ``band`` dim; multi-band keep it (numbered 1..N).
+    ``chunks=None`` loads eagerly; ``chunks=-1`` keeps it lazy as one dask chunk.
     """
     da = rxr.open_rasterio(url, masked=True, chunks=chunks)
     assert isinstance(da, xr.DataArray)

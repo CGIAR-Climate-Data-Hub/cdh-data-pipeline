@@ -62,7 +62,6 @@ def load_layer(name):
     # Column names and string values carry a UTF-8 BOM prefix.
     df.columns = df.columns.str.removeprefix("﻿").str.lower()
     df = df.replace(r"^﻿", "", regex=True)
-    # make_valid leaves valid rows untouched.
     bad = ~df.is_valid
     df.loc[bad, "geometry"] = df.geometry[bad].make_valid()
     return fix_japan(df)
@@ -73,7 +72,6 @@ def load_attrs(name):
     # drop ArcGIS export artefacts
     df = df.drop(columns=["Layer", "Shape_Leng", "Shape_Area"], errors="ignore")
     df.columns = df.columns.str.lower()
-    # cast GAUL codes to integers
     gaul = df.filter(like="gaul_").columns
     df[gaul] = df[gaul].astype("Int64").replace(0, pd.NA)
     return fix_japan(df)
