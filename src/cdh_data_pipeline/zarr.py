@@ -10,7 +10,7 @@ from geozarr_toolkit import (
     from_rioxarray,
 )
 from topozarr import create_pyramid
-from zarr.codecs import BloscCodec, BloscShuffle
+from zarr.codecs import BloscCodec
 from zarr.storage import ObjectStore
 
 from cdh_data_pipeline.recipe import log
@@ -23,7 +23,7 @@ def blosc_zstd(typesize=4, clevel=9, *, shuffle=False):
     Leave shuffle off for noisy float32 rasters. Enable it for low-entropy integer data
     and set ``typesize`` to the dtype itemsize.
     """
-    sh = BloscShuffle.shuffle if shuffle else BloscShuffle.noshuffle
+    sh = "shuffle" if shuffle else "noshuffle"
     return BloscCodec(cname="zstd", clevel=clevel, shuffle=sh, typesize=typesize)
 
 

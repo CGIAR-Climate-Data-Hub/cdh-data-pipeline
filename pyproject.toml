@@ -6,31 +6,30 @@ readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Brayden Youngberg", email = "bjyberg1@gmail.com" }]
 # Lower bounds match tested versions in uv.lock.
-# zarr 3.2+ is required for v3 sharding, BloscCodec, and ObjectStore.
 dependencies = [
-    "dask>=2025.1.0",
-    "geopandas>=1.0",  # GeoParquet 1.1: write_covering_bbox + hilbert_distance
+    "dask>=2026.8.0",
+    "geopandas>=1.1.4",  # GeoParquet 1.1: write_covering_bbox + hilbert_distance
     "geozarr-toolkit>=0.1.2,<0.2",  # pre-1.0; cap minor. Git-pinned, see [tool.uv.sources].
-    "obstore>=0.9.0",
-    "pyarrow>=17.0",  # parquet writer backend
-    "rasterio>=1.4.0",
-    "rioxarray>=0.18.0",
-    "topozarr>=0.1.5,<0.2",  # multiscale pyramids; pre-1.0
-    "xproj>=0.1.0",  # CRS metadata for topozarr
-    "xarray>=2025.1.0",
-    "zarr>=3.2.0",
+    "obstore>=0.11.1",
+    "pyarrow>=25.0.1",  # parquet writer backend
+    "rasterio>=1.5.1",
+    "rioxarray>=0.23.0",
+    "topozarr>=0.1.9,<0.2",  # multiscale pyramids; pre-1.0
+    "xproj>=0.2.1",  # CRS metadata for topozarr
+    "xarray>=2026.7.0",
+    "zarr>=3.4.0",
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.21,<0.12.0"]
+requires = ["uv_build>=0.12.17,<0.13.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "prek>=0.4.5",
-    "pytest>=9.1.0",
-    "ruff>=0.15.18",
-    "ty>=0.0.52",
+    "prek>=0.5.3",
+    "pytest>=9.1.1",
+    "ruff>=0.16.8",
+    "ty>=0.0.83",
 ]
 
 [tool.uv.sources]
