@@ -161,7 +161,8 @@ def write_multiscale_zarr(
 
     ``chunking`` may be either an integer or a callable. Integers are passed to
     topozarr as ``chunks_per_shard``. Callables receive ``(var, level_index, sizes)``
-    and return ``"chunks"`` and/or ``"shards"`` overrides for that level.
+    and return ``"chunks"`` and/or ``"shards"`` overrides for that level. ``None``
+    (default) writes unsharded, so each tile stays individually addressable.
     """
     methods = methods or {}
     if layout not in ("variable", "level"):
