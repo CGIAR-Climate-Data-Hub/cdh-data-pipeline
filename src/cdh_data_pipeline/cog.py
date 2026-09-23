@@ -16,6 +16,8 @@ _COG_OPTS = {
     "bigtiff": "IF_SAFER",
     "overview_resampling": "average",
     "interleave": "PIXEL",
+    "sparse_ok": "TRUE",
+    "statistics": "YES",
 }
 
 
