@@ -36,8 +36,9 @@ def write_json(url, data):
 
 
 def open_raster(url, name=None, *, chunks=None):
-    """Read a single-band raster as float32, nodata as NaN, attrs cleared.
+    """Read a raster as float32, nodata as NaN, attrs cleared.
 
+    Single-band rasters drop the ``band`` dim; multi-band keep it (numbered 1..N).
     ``chunks=None`` loads eagerly; ``chunks=-1`` keeps it lazy as one dask chunk.
     """
     da = rxr.open_rasterio(url, masked=True, chunks=chunks)
