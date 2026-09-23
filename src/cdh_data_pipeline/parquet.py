@@ -7,7 +7,6 @@ import pandas as pd
 from cdh_data_pipeline.recipe import log
 from cdh_data_pipeline.storage import open_fs
 
-# write_statistics is already True by default, so it is not repeated here.
 _PARQUET_OPTS = {
     "compression": "zstd",
     "row_group_size": 100_000,
@@ -16,37 +15,25 @@ _PARQUET_OPTS = {
 
 
 def write_parquet(df, url, *, sort=True, **kwargs):
-    """Write a DataFrame to ``url`` as Parquet, or a GeoDataFrame as GeoParquet 1.1.
+    """Write a DataFrame as Parquet, or a GeoDataFrame as GeoParquet 1.1.
 
-    Geometry goes out as WKB with a bbox covering column, Hilbert-sorted so each row
-    group's bbox stays tight enough for readers to skip on a spatial filter. Page
-    indexes are written so readers can also skip pages within a row group.
+    GeoDataFrames get a bbox column and are Hilbert-sorted so readers can skip
+    row groups on a spatial filter.
 
-    ``sort`` sets the physical row order that row-group statistics are built from.
-    ``True`` (default) Hilbert-sorts a GeoDataFrame and leaves a plain DataFrame
-    alone; ``False`` writes rows as given. A list of column names sorts by those
-    columns so readers skip on an attribute filter, and for a GeoDataFrame applies
-    Hilbert order within each group — which only buys back spatial skipping when a
-    key value holds more rows than ``row_group_size``, otherwise row groups straddle
-    key values and every bbox covers the full extent.
-
-    Extra kwargs reach ``pyarrow.parquet.write_table`` and override the defaults,
-    e.g. ``partition_cols`` for a hive layout. Hive is tabular-only: geopandas
-    writes a single file and cannot partition.
+    ``sort``: ``True`` Hilbert-sorts geometry, ``False`` keeps row order, and a
+    list of columns sorts by those first (then Hilbert, for geometry).
+    Extra kwargs go to pyarrow, e.g. ``partition_cols`` (plain DataFrames only).
     """
     fs = open_fs(url)
     opts = {"index": False, **_PARQUET_OPTS, **kwargs}
     if opts.get("compression") == "zstd":
         opts.setdefault("compression_level", 9)
-    if isinstance(sort, str):  # a bare name would iterate as characters
+    if isinstance(sort, str):
         sort = [sort]
     keys = [] if sort is True else list(sort or [])
     if isinstance(df, gpd.GeoDataFrame):
         if "partition_cols" in opts:
-            raise ValueError(
-                "partition_cols is tabular-only; geopandas cannot write a hive "
-                "dataset. Partition by hand into one GeoParquet per prefix."
-            )
+            raise ValueError("partition_cols is not supported for GeoDataFrames")
         if sort is not False:
             geometry = df.geometry.name
 
@@ -55,14 +42,14 @@ def write_parquet(df, url, *, sort=True, **kwargs):
                     return column
                 g = gpd.GeoSeries(column, crs=df.crs)
                 ok = ~(g.is_empty | g.isna())
-                # hilbert_distance rejects empty geometry; NaN sorts those rows last
+                # hilbert_distance fails on empty geometry; sort those rows last.
                 out = pd.Series(np.nan, index=g.index)
                 if ok.any():
                     out.loc[ok] = g[ok].hilbert_distance()
                 return out
 
             df = df.sort_values([*keys, geometry], key=sort_key)
-        # required by write_covering_bbox; caller still wins
+        # write_covering_bbox needs schema 1.1.0
         opts = {"schema_version": "1.1.0", "write_covering_bbox": True, **opts}
     elif keys:
         df = df.sort_values(keys)

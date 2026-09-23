@@ -27,18 +27,11 @@ def make_cog(
     long_names=None,
     cog_options=None,
 ):
-    """Build a COG in memory and return its bytes.
+    """Build a multi-band COG in memory and return its bytes.
 
-    ``srcs`` and ``descriptions`` are per-band lists. Each source band is read as a
-    full array, and GDAL also assembles the COG plus overviews in memory.
-
-    Descriptions are what GDAL/terra expose as band names, so keep them short and
-    stable (e.g. crop codes); ``long_names`` adds a human-readable ``long_name``
-    metadata tag per band.
-
-    ``cog_options`` overrides individual GDAL creation options for this call,
-    e.g. ``{"interleave": "BAND"}`` to keep single-band reads cheap on a
-    multi-band COG.
+    One band per source file. ``descriptions`` become band names, so keep them
+    short; ``long_names`` adds a readable ``long_name`` tag per band.
+    ``cog_options`` overrides GDAL creation options, e.g. ``{"interleave": "BAND"}``.
     """
     with rasterio.open(srcs[0]) as s0:
         profile = {
@@ -63,7 +56,7 @@ def make_cog(
 
 
 def write_cog(url, srcs, descriptions, units, **kwargs):
-    """Build a COG with :func:`make_cog` and write it to ``url``."""
+    """Build a COG with ``make_cog`` and write it to ``url``."""
     prefix, _, name = url.rpartition("/")
     log.info("writing %s (%d bands)", url, len(srcs))
     open_store(prefix).put(name, make_cog(srcs, descriptions, units, **kwargs))

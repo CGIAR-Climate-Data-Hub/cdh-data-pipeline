@@ -5,13 +5,11 @@ import os
 import sys
 import time
 
-# One logger for the library and recipes. Timestamps stand in for progress bars:
-# recipes run unattended and the slow parts (dask, GDAL) cannot report percent.
 log = logging.getLogger("cdh")
 
 
 def _timed(name, step):
-    """Run one step, logging its name and elapsed time, also on failure."""
+    """Run one step and log how long it took."""
     log.info("== %s", name)
     t0 = time.monotonic()
     try:
@@ -23,7 +21,7 @@ def _timed(name, step):
 
 
 def _exit(code):
-    """Flush and hard-exit; skips zarr v3 / obstore's noisy async teardown."""
+    """Hard-exit to skip zarr/obstore's noisy async teardown."""
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(code)
@@ -32,8 +30,7 @@ def _exit(code):
 def run(*builders):
     """Run build steps in order; exit 1 on the first failure.
 
-    Step names on the command line select a subset, e.g.
-    ``uv run recipes/mapspam.py build_cogs`` re-runs only that step.
+    Pass step names to run a subset: ``uv run recipes/mapspam.py build_cogs``.
     """
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
@@ -45,6 +42,6 @@ def run(*builders):
     try:
         for name in names:
             _timed(name, steps[name])
-    except Exception:  # noqa: BLE001  _timed already logged it
+    except Exception:  # noqa: BLE001  already logged
         _exit(1)
     _exit(0)
