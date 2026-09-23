@@ -22,10 +22,9 @@ __all__ = [
     "write_cog",
     "write_gti",
     "write_json",
+    "write_multiscale_zarr",
     "write_parquet",
     "write_stac_geoparquet",
     "write_vrt",
-    "write_multiscale_zarr",
-    "write_parquet",
     "write_zarr",
 ]
