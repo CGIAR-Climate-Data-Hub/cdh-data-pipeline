@@ -131,8 +131,8 @@ def write_multiscale_zarr(
     ds,
     url,
     *,
+    factors,
     methods=None,
-    factors=None,
     encoding=None,
     chunking=None,
     layout="variable",
@@ -156,8 +156,8 @@ def write_multiscale_zarr(
     ``"nearest"`` subsamples instead of averaging, so use it for categorical
     rasters and masks where an averaged class code would be meaningless.
 
-    ``factors`` gives cumulative downsampling factors. Factor 1 is added
-    automatically if missing. If omitted, topozarr chooses a power-of-two pyramid.
+    ``factors`` gives cumulative downsampling factors, e.g. ``[2, 4, 8]``. Factor 1
+    is added automatically if missing.
 
     ``encoding`` is a mapping of variable name to Zarr encoding and is applied to
     every level of that variable. Use it for settings that should not vary by
@@ -177,8 +177,7 @@ def write_multiscale_zarr(
             f"records one resampling_method per group); got {methods}. "
             "Use layout='variable' for per-variable methods."
         )
-    if factors is not None:
-        factors = sorted({1, *factors})
+    factors = sorted({1, *factors})
     # Integer chunking stays on topozarr's writer; callables need explicit encoding.
     per_shard = chunking if isinstance(chunking, int) else None
     level_fn = chunking if callable(chunking) else None
