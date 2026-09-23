@@ -33,7 +33,10 @@ def write_parquet(df, url, *, sort=True, **kwargs):
     keys = [] if sort is True else list(sort or [])
     if isinstance(df, gpd.GeoDataFrame):
         if "partition_cols" in opts:
-            raise ValueError("partition_cols is not supported for GeoDataFrames")
+            raise ValueError(
+                "partition_cols is not supported for GeoDataFrames. "
+                "Partition by hand into one GeoParquet per prefix, if needed."
+            )
         if sort is not False:
             geometry = df.geometry.name
 
