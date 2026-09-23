@@ -1,6 +1,7 @@
 """Object-store access and raster loading."""
 
 import json
+from pathlib import Path
 
 import rioxarray as rxr
 import xarray as xr
@@ -31,8 +32,14 @@ def clear_store(store):
 def write_json(url, data):
     """Write a dict as JSON to a local path or object-store URL."""
     prefix, _, name = url.rpartition("/")
-    open_store(prefix).put(name, json.dumps(data, indent=2).encode())
+    open_store(prefix or ".").put(name, json.dumps(data, indent=2).encode())
     log.info("wrote %s", url)
+
+
+def put_file(url, path):
+    """Upload a local file to a local path or object-store URL."""
+    prefix, _, name = url.rpartition("/")
+    open_store(prefix or ".").put(name, Path(path).read_bytes())
 
 
 def open_raster(url, name=None, *, chunks=None):
