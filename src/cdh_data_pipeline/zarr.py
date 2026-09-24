@@ -3,39 +3,31 @@
 import rioxarray  # noqa: F401  registers .rio
 import xproj  # noqa: F401  registers .proj
 import zarr
-from geozarr_toolkit import (
-    ProjConventionMetadata,
-    SpatialConventionMetadata,
-    create_zarr_conventions,
-    from_rioxarray,
-)
-from topozarr import create_pyramid
-from zarr.codecs import BloscCodec, BloscShuffle
+from topozarr import attach_geozarr_metadata, create_pyramid
+from zarr.codecs import BloscCodec
 from zarr.storage import ObjectStore
 
 from cdh_data_pipeline.recipe import log
 from cdh_data_pipeline.storage import clear_store, open_store
 
+_SHAPE_KEYS = {"chunks", "shards"}
+
 
 def blosc_zstd(typesize=4, clevel=9, *, shuffle=False):
-    """Return a Blosc Zstd codec.
-
-    Leave shuffle off for noisy float32 rasters. Enable it for low-entropy integer data
-    and set ``typesize`` to the dtype itemsize.
-    """
-    sh = BloscShuffle.shuffle if shuffle else BloscShuffle.noshuffle
+    """Blosc Zstd codec. For integer data, set ``shuffle`` and ``typesize``."""
+    sh = "shuffle" if shuffle else "noshuffle"
     return BloscCodec(cname="zstd", clevel=clevel, shuffle=sh, typesize=typesize)
 
 
 def _vlen_str_coords(ds):
-    """Store unicode coordinate labels as portable variable-length strings."""
+    """Cast unicode coords to object so zarr writes vlen strings."""
     str_coords = {c: ds[c].astype(object) for c in ds.coords if ds[c].dtype.kind == "U"}
     return ds.assign_coords(str_coords) if str_coords else ds
 
 
 def _replace_sum_levels(dt, var, factors):
-    """Recompute sum overviews so empty windows stay missing."""
-    # Avoid reducing coordinates; xarray forwards min_count to coord reducers too.
+    """Recompute sum overviews so all-NaN windows stay NaN, not 0."""
+    # Drop coords: xarray passes min_count to coord reducers, which rejects it.
     prev = dt["0"][var].drop_vars(dt["0"][var].coords)
     for lvl in range(1, len(factors)):
         step = factors[lvl] // factors[lvl - 1]
@@ -44,8 +36,14 @@ def _replace_sum_levels(dt, var, factors):
         dt[str(lvl)][var] = prev.assign_attrs(dt[str(lvl)][var].attrs)
 
 
+def _geozarr_attrs(da, crs):
+    """GeoZarr proj + spatial attrs for one array."""
+    # geozarr-toolkit 0.1.2 writes dead convention URLs; revisit once 0.1.3 ships.
+    return attach_geozarr_metadata(da.to_dataset(), crs=crs).attrs
+
+
 def _open_zarr_store(url):
-    """Open a zarr store after clearing an existing .zarr prefix."""
+    """Open a .zarr store, deleting anything already there."""
     if not url.rstrip("/").endswith(".zarr"):
         raise ValueError(f"refusing to overwrite non-.zarr store: {url}")
     store = open_store(url)
@@ -54,23 +52,16 @@ def _open_zarr_store(url):
 
 
 def write_zarr(ds, url, encoding=None, *, consolidated=True):
-    """Write a Dataset to an obstore-backed GeoZarr store.
+    """Write a Dataset as a GeoZarr v3 store.
 
-    Each data variable receives GeoZarr attrs from rioxarray. Consolidated metadata
-    makes cloud opens cheaper, but it is a zarr-python extension for v3 stores.
-
-    ``encoding`` maps variable name to Zarr encoding, e.g.
+    ``encoding`` maps variable name to zarr encoding, e.g.
     ``{"var": {"chunks": (1080, 1080), "compressors": (blosc_zstd(),)}}``.
-    Variables without a compressor use Zarr's native default codec.
     """
     store = _open_zarr_store(url)
     ds = _vlen_str_coords(ds)
-
-    conventions = create_zarr_conventions(
-        SpatialConventionMetadata(), ProjConventionMetadata()
-    )
+    crs = ds.rio.crs.to_string()
     for da in ds.data_vars.values():
-        da.attrs.update(from_rioxarray(da), zarr_conventions=conventions)
+        da.attrs.update(_geozarr_attrs(da, crs))
     log.info("writing %s (%d vars)", url, len(ds.data_vars))
     ds.to_zarr(
         ObjectStore(store),
@@ -82,15 +73,11 @@ def write_zarr(ds, url, encoding=None, *, consolidated=True):
     log.info("wrote %s", url)
 
 
-def _write_pyramid(pyr, target, variables, methods, encoding, level_fn, conventions):
-    """Write one (possibly multi-variable) pyramid to ``target`` and stamp CRS attrs.
-
-    Shared by both layouts: variable-first calls it once per variable into a
-    ``<var>`` subgroup; level-first calls it once for the whole dataset into the root.
-    """
+def _write_pyramid(pyr, target, variables, methods, encoding, level_fn, crs):
+    """Write one pyramid to ``target`` and stamp CRS attrs on each array."""
     dt = pyr.as_datatree()
     sum_vars = [v for v in variables if methods.get(v, "mean") == "sum"]
-    # Use xarray when we need custom encoding or sum's missing-data semantics.
+    # topozarr's fast writer can't do custom encoding or NaN-preserving sums.
     if encoding is not None or level_fn is not None or sum_vars:
         for v in sum_vars:
             _replace_sum_levels(dt, v, pyr.factors)
@@ -103,99 +90,63 @@ def _write_pyramid(pyr, target, variables, methods, encoding, level_fn, conventi
                 shapes = pyr.encoding[k][v]
                 if level_fn:
                     custom = level_fn(v, int(name), sizes)
-                    if not isinstance(custom, dict) or custom.keys() - {
-                        "chunks",
-                        "shards",
-                    }:
+                    if not isinstance(custom, dict) or custom.keys() - _SHAPE_KEYS:
                         raise ValueError(
-                            f"chunking({v!r}, {name}, ...) must return a dict of "
-                            f"'chunks'/'shards' (encoding goes in `encoding=`); got {custom!r}"
+                            f"chunking must return chunks/shards; got {custom!r}"
                         )
                     shapes = {**shapes, **custom}
                 enc[k][v] = {**(encoding or {}).get(v, {}), **shapes}
         dt.to_zarr(target, mode="a", zarr_format=3, consolidated=False, encoding=enc)
     else:
         pyr.write(target, mode="a")
-    # GDAL/QGIS resolve the CRS from proj attrs on the array node itself;
-    # topozarr only writes them on the variable group.
+    # GDAL reads the CRS from the array; topozarr only writes it on the group.
     grp = zarr.open_group(target, mode="r+")
     for k in pyr.encoding:
         name = k.strip("/")
         for v in variables:
-            grp[f"{name}/{v}"].attrs.update(
-                from_rioxarray(dt[name][v]), zarr_conventions=conventions
-            )
+            grp[f"{name}/{v}"].attrs.update(_geozarr_attrs(dt[name][v], crs))
 
 
 def write_multiscale_zarr(
     ds,
     url,
     *,
+    factors,
     methods=None,
-    factors=None,
     encoding=None,
     chunking=None,
     layout="variable",
 ):
-    """Write a multiscale GeoZarr store.
+    """Write a multiscale GeoZarr store. Level 0 is native resolution.
 
-    ``layout`` picks the store shape. ``"variable"`` (default) writes
-    ``<store>.zarr/<var>/{0,1,2,...}/<var>`` — each variable is its own pyramid, so
-    each can use its own downsampling method. ``"level"`` writes
-    ``<store>.zarr/{0,1,2,...}/<var>`` — one pyramid for the whole dataset, so
-    ``xr.open_zarr(group="0")`` yields every variable at that resolution. Level 0 is
-    native resolution; higher levels are coarsened overviews.
+    ``layout="variable"`` writes ``<var>/<level>/<var>``, one pyramid per variable.
+    ``layout="level"`` writes ``<level>/<var>`` and needs one method for all variables.
 
-    ``"level"`` requires a single shared method for all variables: the multiscales
-    convention records one ``resampling_method`` per group, so it cannot express
-    per-variable methods. Mixed ``methods`` with ``layout="level"`` raises.
-
-    ``methods`` maps variable names to downsampling methods: ``"mean"``, ``"sum"``,
-    ``"max"``, ``"min"``, or ``"nearest"``. Unspecified variables use ``"mean"``.
-    ``"sum"`` variables use ``min_count=1`` so all-missing windows stay missing.
-    ``"nearest"`` subsamples instead of averaging, so use it for categorical
-    rasters and masks where an averaged class code would be meaningless.
-
-    ``factors`` gives cumulative downsampling factors. Factor 1 is added
-    automatically if missing. If omitted, topozarr chooses a power-of-two pyramid.
-
-    ``encoding`` is a mapping of variable name to Zarr encoding and is applied to
-    every level of that variable. Use it for settings that should not vary by
-    overview level, such as dtype, scale factors, fill values, and compressors.
-
-    ``chunking`` may be either an integer or a callable. Integers are passed to
-    topozarr as ``chunks_per_shard``. Callables receive ``(var, level_index, sizes)``
-    and return ``"chunks"`` and/or ``"shards"`` overrides for that level.
+    ``factors``: cumulative downsampling factors, e.g. ``[2, 4, 8]``.
+    ``methods``: variable -> ``"mean"`` (default), ``"sum"``, ``"max"``, ``"min"``
+    or ``"nearest"`` (use for categorical data).
+    ``encoding``: variable -> zarr encoding, applied to every level.
+    ``chunking``: int chunks per shard, or a ``(var, level, sizes)`` callable
+    returning ``{"chunks": ..., "shards": ...}``. ``None`` writes unsharded.
     """
     methods = methods or {}
     if layout not in ("variable", "level"):
         raise ValueError(f"layout must be 'variable' or 'level'; got {layout!r}")
     used_methods = {methods.get(v, "mean") for v in ds.data_vars}
     if layout == "level" and len(used_methods) > 1:
-        raise ValueError(
-            "layout='level' needs one shared method for all variables (multiscales "
-            f"records one resampling_method per group); got {methods}. "
-            "Use layout='variable' for per-variable methods."
-        )
-    if factors is not None:
-        factors = sorted({1, *factors})
-    # Integer chunking stays on topozarr's writer; callables need explicit encoding.
+        raise ValueError(f"layout='level' needs one method for all vars; got {methods}")
+    factors = sorted({1, *factors})
     per_shard = chunking if isinstance(chunking, int) else None
     level_fn = chunking if callable(chunking) else None
     if chunking is not None and per_shard is None and level_fn is None:
-        raise TypeError(
-            "chunking must be an int (N chunks/shard) or a callable "
-            f"(var, level, sizes) -> {{'chunks':..,'shards':..}}; got {type(chunking).__name__}"
-        )
+        raise TypeError(f"chunking must be an int or callable; got {chunking!r}")
     ds = _vlen_str_coords(ds)
     # topozarr reads CRS from xproj metadata.
-    ds = ds.proj.assign_crs(spatial_ref=ds.rio.crs.to_string(), allow_override=True)
+    crs = ds.rio.crs.to_string()
+    ds = ds.proj.assign_crs(spatial_ref=crs, allow_override=True)
     store = _open_zarr_store(url)
     root = ObjectStore(store)
     zarr.open_group(root, mode="w")
-    conventions = create_zarr_conventions(
-        SpatialConventionMetadata(), ProjConventionMetadata()
-    )
     variables = list(ds.data_vars)
     log.info("writing %s (%d vars, multiscale, %s-first)", url, len(variables), layout)
     if layout == "level":
@@ -205,7 +156,7 @@ def write_multiscale_zarr(
             method=next(iter(used_methods)),
             chunks_per_shard=per_shard,
         )
-        _write_pyramid(pyr, root, variables, methods, encoding, level_fn, conventions)
+        _write_pyramid(pyr, root, variables, methods, encoding, level_fn, crs)
     else:
         for var in variables:
             log.info("  pyramid %s", var)
@@ -216,9 +167,8 @@ def write_multiscale_zarr(
                 chunks_per_shard=per_shard,
             )
             sub = ObjectStore(open_store(f"{url}/{var}"))
-            _write_pyramid(pyr, sub, [var], methods, encoding, level_fn, conventions)
-    # Root attrs last: level-first's pyramid write populates root.attrs
-    # (multiscales); merging keeps it while adding the dataset attrs.
+            _write_pyramid(pyr, sub, [var], methods, encoding, level_fn, crs)
+    # Merge, don't replace: level layout already put multiscales attrs on the root.
     zarr.open_group(root, mode="r+").attrs.update(ds.attrs)
     zarr.consolidate_metadata(root)
     log.info("wrote %s", url)

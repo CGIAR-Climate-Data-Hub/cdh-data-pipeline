@@ -34,7 +34,7 @@ def build_zarr():
     ds = ds[["temperature", "climatology"]]
 
     codec = (Shuffle(elementsize=2), ZstdCodec(level=19))
-    i16 = dict(dtype="int16", _FillValue=-32768, compressors=codec)
+    i16 = {"dtype": "int16", "_FillValue": -32768, "compressors": codec}
     encoding = {
         "temperature": {**i16, "scale_factor": np.float32(0.001)},
         "climatology": {**i16, "scale_factor": np.float32(0.01)},

@@ -18,7 +18,7 @@ __all__ = [
     "run",
     "write_cog",
     "write_json",
-    "write_parquet",
     "write_multiscale_zarr",
+    "write_parquet",
     "write_zarr",
 ]
