@@ -11,6 +11,7 @@ from pathlib import Path
 import geopandas as gpd
 import rasterio
 import rio_vrt
+from rasterio.dtypes import dtype_rev, typename_fwd
 from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 from rasterio.shutil import copy as rio_copy  # ty: ignore[unresolved-import]
@@ -21,144 +22,195 @@ from cdh_data_pipeline.storage import put_file
 
 # URL scheme -> GDAL virtual filesystem prefix
 _VSI = {"s3": "/vsis3/", "gs": "/vsigs/", "az": "/vsiaz/", "abfs": "/vsiaz/"}
-# numpy dtype names -> GDAL names, for the GTI layer metadata
-_GDAL_TYPE = {
-    "int8": "Int8",
-    "uint8": "Byte",
-    "int16": "Int16",
-    "uint16": "UInt16",
-    "int32": "Int32",
-    "uint32": "UInt32",
-    "float32": "Float32",
-    "float64": "Float64",
-}
 
 
-def write_vrt(url, bands, *, asset="data"):
+def write_vrt(url, bands, *, asset="data", compute_stats=False):
     """Write a VRT at ``url`` with one band per entry of ``bands``.
 
     ``bands`` maps band name to a source: one raster path/URL, a list of them,
-    or a list of STAC items. Lists are mosaicked into ``<stem>-<band>.vrt``
-    siblings that the main VRT stacks. Sources must share resolution, dtype and
-    nodata, or this raises.
+    or a list of STAC items. With several bands, lists are mosaicked into
+    ``<stem>-<band>.vrt`` siblings that the main VRT stacks.
+
+    Band stats come from the STAC items' band statistics when every item has
+    them. ``compute_stats`` fills the rest from overviews, which reads every tile.
     """
+    _check_publishable(url, bands.values(), asset)
     prefix, _, name = url.rpartition("/")
-    sources = {
-        b: [src] if isinstance(src, (str, Path)) else list(src)
-        for b, src in bands.items()
-    }
-    _check_publishable(url, [s for srcs in sources.values() for s in srcs], asset)
-    lone = all(isinstance(src, (str, Path)) for src in bands.values())
+    names = tuple(bands)
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp, name)
-        if lone:  # one raster per band: stack directly, no siblings
-            _build_vrt(
-                out,
-                [_vsi(str(srcs[0])) for srcs in sources.values()],
-                mosaic=False,
-                names=tuple(sources),
-            )
-        else:
+        if len(bands) == 1:
+            first, band_stats = _mosaic(bands[names[0]], asset, out)
+            stats = [band_stats]
+        elif all(isinstance(src, (str, Path)) for src in bands.values()):
+            files = [_vsi(str(src)) for src in bands.values()]
+            _build(out, files, mosaic=False)
+            first, stats = files[0], [None] * len(files)
+        else:  # rio-vrt's relative flag is all-or-nothing, so every band gets a sibling
             parts = []
-            for band, srcs in sources.items():
-                part = out if len(sources) == 1 else Path(tmp, f"{out.stem}-{band}.vrt")
-                if not srcs:
-                    raise ValueError(f"{part.stem}: no sources")
-                if isinstance(srcs[0], dict):
-                    _stacit_to_vrt(srcs, asset, part)
-                else:
-                    _build_vrt(part, [_vsi(str(s)) for s in srcs], mosaic=True)
+            for band, src in bands.items():
+                part = Path(tmp, f"{out.stem}-{band}.vrt")
+                part_first, part_stats = _mosaic(src, asset, part)
+                _add_metadata(part, part_first, (band,), [part_stats], compute_stats)
                 parts.append(part)
-            if len(parts) > 1:
-                _build_vrt(
-                    out, parts, mosaic=False, relative=True, names=tuple(sources)
-                )
+            _build(out, parts, mosaic=False, relative=True)
+            first, stats = parts[0], [_read_stats(p) for p in parts]
+        _add_metadata(out, first, names, stats, compute_stats)
         for part in Path(tmp).iterdir():
             put_file(f"{prefix or '.'}/{part.name}", part)
     log.info("wrote %s (%d bands)", url, len(bands))
 
 
-def _stacit_to_vrt(items, asset, out):
+def _mosaic(src, asset, out):
+    """Write one band's source (a raster, list of rasters or STAC items) to ``out``.
+
+    Returns the first raster's path, which the VRT copies nodata and overviews
+    from, and the band stats from STAC (None for plain rasters).
+    """
+    if isinstance(src, (str, Path)):
+        src = [src]
+    if not src:
+        raise ValueError(f"{out.stem}: no sources")
+    if isinstance(src[0], dict):
+        _mosaic_stac(src, asset, out)
+        return _vsi(_href(src[0], asset)), _stac_stats(src, asset)
+    files = [_vsi(str(s)) for s in src]
+    _build(out, files, mosaic=True)
+    return files[0], None
+
+
+def _mosaic_stac(items, asset, out):
     """Mosaic ``asset`` across STAC items with GDAL's STACIT driver, saved as VRT."""
     features = [
-        {
-            **i,
-            "assets": {
-                asset: i["assets"][asset] | {"href": _vsi(i["assets"][asset]["href"])}
-            },
-        }
+        i | {"assets": {asset: i["assets"][asset] | {"href": _vsi(_href(i, asset))}}}
         for i in items
     ]
     body = json.dumps({"type": "FeatureCollection", "features": features}).encode()
-    with MemoryFile(body, ext=".json") as mem:
-        with rasterio.open(f'STACIT:"{mem.name}"', ASSET=asset, MAX_ITEMS="0") as src:
-            rio_copy(src, out, driver="VRT")
-    _finish_vrt(out, _probe(features[0]["assets"][asset]["href"]))
+    with (
+        MemoryFile(body, ext=".json") as mem,
+        rasterio.open(f'STACIT:"{mem.name}"', ASSET=asset, MAX_ITEMS="0") as src,
+    ):
+        rio_copy(src, out, driver="VRT")
 
 
-def _build_vrt(out, sources, *, mosaic, relative=False, names=None):
-    """Mosaic or stack ``sources`` with rio-vrt.
+def _stac_stats(items, asset):
+    """Combine each tile's band stats into mosaic stats; None if any tile lacks them.
 
-    rio-vrt assumes square pixels and drops nodata, so pass ``res`` and fix after.
+    Tiles are weighted by valid pixels. Without ``valid_percent`` they are
+    weighted by size, so mean and stddev are marked approximate.
     """
-    tiles = [_probe(src) for src in sources]
-    if len(sources) == 1:  # rio-vrt crashes on a single input
-        with rasterio.open(sources[0]) as raster:
-            rio_copy(raster, out, driver="VRT")
-    else:
-        for src, tile in zip(sources[1:], tiles[1:]):
-            for key in ("res", "dtype", "nodata"):
-                if not _same(key, tile[key], tiles[0][key]):
-                    raise ValueError(
-                        f"{src}: {key} {tile[key]} differs from {sources[0]}: {tiles[0][key]}"
-                    )
-        rio_vrt.build_vrt(
-            out,
-            [str(s) for s in sources],
-            mosaic=mosaic,
-            relative=relative,
-            res=tiles[0]["res"],
+    tiles = []
+    for i in items:
+        a, props = i["assets"][asset], i["properties"]
+        # STAC 1.1 ``bands``, or the 1.0 raster extension's ``raster:bands``
+        bands = next(
+            (d[k] for d in (a, props) for k in ("bands", "raster:bands") if d.get(k)),
+            None,
         )
-    _finish_vrt(out, tiles[0], names)
+        stats = bands[0].get("statistics", {}) if bands else {}
+        if not {"minimum", "maximum", "mean", "stddev"} <= stats.keys():
+            log.warning("%s: no band stats for %s, skipping", i["id"], asset)
+            return None
+        h, w = a.get("proj:shape") or props["proj:shape"]
+        tiles.append((h * w * stats.get("valid_percent", 100) / 100, stats))
+    n = sum(count for count, _ in tiles)
+    mean = sum(count * s["mean"] for count, s in tiles) / n
+    var = sum(
+        count * (s["stddev"] ** 2 + (s["mean"] - mean) ** 2) for count, s in tiles
+    )
+    out = {
+        "STATISTICS_MINIMUM": min(s["minimum"] for _, s in tiles),
+        "STATISTICS_MAXIMUM": max(s["maximum"] for _, s in tiles),
+        "STATISTICS_MEAN": mean,
+        "STATISTICS_STDDEV": math.sqrt(var / n),
+    }
+    if any("valid_percent" not in s for _, s in tiles):
+        out["STATISTICS_APPROXIMATE"] = "YES"
+    return out
 
 
-def _same(key, a, b):
-    """Compare tile properties; res allows float noise, NaN nodata matches NaN."""
-    if key == "res":
-        return all(math.isclose(x, y, rel_tol=1e-9) for x, y in zip(a, b))
-    if key == "nodata" and isinstance(a, float) and isinstance(b, float):
-        return a == b or (math.isnan(a) and math.isnan(b))
-    return a == b
+def _read_stats(path):
+    """Band 1 ``STATISTICS_*`` tags of a raster."""
+    with rasterio.open(path) as src:
+        return {k: v for k, v in src.tags(1).items() if k.startswith("STATISTICS_")}
 
 
-def _probe(source):
+def _build(out, files, *, mosaic, relative=False):
+    """Mosaic or stack ``files`` with rio-vrt.
+
+    All must share resolution, dtype and nodata: rio-vrt takes them from the first
+    file, so a mismatch would silently corrupt values.
+    """
+    if len(files) == 1:  # rio-vrt crashes on a single input
+        with rasterio.open(files[0]) as src:
+            rio_copy(src, out, driver="VRT")
+        return
+    props = []
+    for f in files:
+        with rasterio.open(f) as src:
+            props.append((src.res, src.dtypes[0], str(src.nodata)))  # str: NaN == NaN
+    for f, (res, dtype, nodata) in zip(files, props):
+        if (
+            not all(map(math.isclose, res, props[0][0]))
+            or (dtype, nodata) != props[0][1:]
+        ):
+            raise ValueError(
+                f"{f}: {res, dtype, nodata} differs from {files[0]}: {props[0]}"
+            )
+    # rio-vrt assumes square pixels unless given res
+    rio_vrt.build_vrt(
+        out, [str(f) for f in files], mosaic=mosaic, relative=relative, res=props[0][0]
+    )
+
+
+def _add_metadata(vrt_path, first_source, names=None, stats=None, compute_stats=False):
+    """Set nodata (from ``first_source``), band names, stats and virtual overviews.
+
+    rio-vrt drops nodata when stacking. Virtual overviews store nothing; reads fall
+    through to the COGs' overviews. ``stats`` holds one dict or None per band.
+    """
+    first = _raster_info(first_source)
+    resampling = (
+        Resampling.average if first["dtype"].startswith("Float") else Resampling.nearest
+    )
+    with (
+        rasterio.Env(VRT_VIRTUAL_OVERVIEWS="YES"),
+        rasterio.open(vrt_path, "r+") as vrt,
+    ):
+        if first["nodata"] is not None:
+            vrt.nodata = first["nodata"]
+        if names:
+            vrt.descriptions = names
+        if first["overviews"]:
+            vrt.build_overviews(first["overviews"], resampling)
+        stats = list(stats or [])
+        missing = [band for band, s in enumerate(stats, 1) if not s]
+        if compute_stats and missing:
+            # update_stats(approx=True) doesn't persist to a VRT, so write tags
+            for band, s in zip(missing, vrt.stats(indexes=missing, approx=True)):
+                stats[band - 1] = {
+                    "STATISTICS_MINIMUM": s.min,
+                    "STATISTICS_MAXIMUM": s.max,
+                    "STATISTICS_MEAN": s.mean,
+                    "STATISTICS_STDDEV": s.std,
+                    "STATISTICS_APPROXIMATE": "YES",
+                }
+        for band, band_stats in enumerate(stats, 1):
+            if band_stats:
+                vrt.update_tags(band, **band_stats)
+
+
+def _raster_info(path):
     """Read the raster properties a mosaic inherits from its first tile."""
-    with rasterio.open(source) as src:
+    with rasterio.open(path) as src:
         return {
             "res": src.res,
             "nodata": src.nodata,
             "overviews": src.overviews(1),
-            "dtype": _GDAL_TYPE[src.dtypes[0]],
+            "dtype": typename_fwd[dtype_rev[src.dtypes[0]]],
             "bands": src.count,
             "crs": src.crs,
         }
-
-
-def _finish_vrt(out, tile, names=None):
-    """Restore nodata and band names, and add virtual overviews.
-
-    Virtual overviews store nothing; reads fall through to the COGs' overviews.
-    """
-    resampling = (
-        Resampling.average if tile["dtype"].startswith("Float") else Resampling.nearest
-    )
-    with rasterio.Env(VRT_VIRTUAL_OVERVIEWS="YES"), rasterio.open(out, "r+") as vrt:
-        if tile["nodata"] is not None:
-            vrt.nodata = tile["nodata"]
-        if names:
-            vrt.descriptions = names
-        if tile["overviews"]:
-            vrt.build_overviews(tile["overviews"], resampling)
 
 
 def write_gti(url, tiles, *, asset="data"):
@@ -173,7 +225,7 @@ def write_gti(url, tiles, *, asset="data"):
         if isinstance(tiles[0], dict)
         else _footprints_from_files(tiles)
     )
-    tile = _probe(df.location.iloc[0])
+    tile = _raster_info(df.location.iloc[0])
     df = df.to_crs(tile["crs"])
     # stops GDAL warping or opening tiles on open
     meta = {
@@ -199,7 +251,7 @@ def _footprints_from_items(items, asset):
     return gpd.GeoDataFrame(
         {
             "id": [i["id"] for i in items],
-            "location": [_vsi(i["assets"][asset]["href"]) for i in items],
+            "location": [_vsi(_href(i, asset)) for i in items],
         },
         geometry=[shape(i["geometry"]) for i in items],
         crs="OGC:CRS84",
@@ -223,15 +275,22 @@ def _footprints_from_files(paths):
 
 
 def _check_publishable(url, sources, asset):
-    """Raise if a remote mosaic would reference local files."""
+    """Raise if a remote mosaic would reference local files.
+
+    ``sources`` holds rasters, STAC items, or lists of either.
+    """
     if "://" not in url:
         return
-    for source in sources:
-        href = (
-            source["assets"][asset]["href"] if isinstance(source, dict) else str(source)
-        )
-        if "://" not in href and not href.startswith("/vsi"):
-            raise ValueError(f"{url} would reference local files, e.g. {href}")
+    for src in sources:
+        for s in src if isinstance(src, (list, tuple)) else [src]:
+            href = _href(s, asset)
+            if "://" not in href and not href.startswith("/vsi"):
+                raise ValueError(f"{url} would reference local files, e.g. {href}")
+
+
+def _href(source, asset):
+    """Path/URL of a raster, or of ``asset`` in a STAC item."""
+    return source["assets"][asset]["href"] if isinstance(source, dict) else str(source)
 
 
 def _vsi(href):
