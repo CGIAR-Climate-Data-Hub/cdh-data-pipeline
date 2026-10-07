@@ -1,5 +1,8 @@
 """Zarr writers for geospatial raster datasets."""
 
+from functools import partial
+
+import numpy as np
 import rioxarray  # noqa: F401  registers .rio
 import xproj  # noqa: F401  registers .proj
 import zarr
@@ -14,9 +17,51 @@ _SHAPE_KEYS = {"chunks", "shards"}
 
 
 def blosc_zstd(typesize=4, clevel=9, *, shuffle=False):
-    """Blosc Zstd codec. For integer data, set ``shuffle`` and ``typesize``."""
-    sh = "shuffle" if shuffle else "noshuffle"
+    """Blosc Zstd codec. For integer data, set ``shuffle`` and ``typesize``.
+
+    ``shuffle`` is ``True`` for byte shuffle or ``"bitshuffle"``.
+    """
+    sh = shuffle if isinstance(shuffle, str) else "shuffle" if shuffle else "noshuffle"
     return BloscCodec(cname="zstd", clevel=clevel, shuffle=sh, typesize=typesize)
+
+
+def _check_range(a, lo, hi, name):
+    """Return ``a`` unless a non-NaN value lies outside lo..hi."""
+    # fmin/fmax skip NaN (written as the fill value) and allocate no masks.
+    amin = np.fmin.reduce(a, axis=None, initial=lo)
+    amax = np.fmax.reduce(a, axis=None, initial=hi)
+    if amin < lo or amax > hi:
+        raise ValueError(
+            f"{name} range {amin}..{amax} overflows its packed range {lo}..{hi}"
+        )
+    return a
+
+
+def check_packable(ds, encoding):
+    """Return ``ds`` with a range check on every float variable packed to integers.
+
+    xarray applies ``scale_factor``/``add_offset`` and casts without checking, so
+    out-of-range values silently wrap or become the fill value. The check runs per
+    dask chunk as the data is written (or immediately for numpy data).
+    """
+    checked = {}
+    for name, enc in (encoding or {}).items():
+        if name not in ds or ds[name].dtype.kind != "f":
+            continue
+        dtype = np.dtype(enc.get("dtype", ds[name].dtype))
+        if dtype.kind not in "iu":
+            continue
+        info, fill = np.iinfo(dtype), enc.get("_FillValue")
+        lo, hi = info.min + (fill == info.min), info.max - (fill == info.max)
+        scale, offset = enc.get("scale_factor", 1), enc.get("add_offset", 0)
+        check = partial(
+            _check_range, lo=lo * scale + offset, hi=hi * scale + offset, name=name
+        )
+        data = ds[name].data
+        checked[name] = ds[name].copy(
+            data=data.map_blocks(check) if hasattr(data, "dask") else check(data)
+        )
+    return ds.assign(checked)
 
 
 def _vlen_str_coords(ds):
@@ -56,9 +101,10 @@ def write_zarr(ds, url, encoding=None, *, consolidated=True):
 
     ``encoding`` maps variable name to zarr encoding, e.g.
     ``{"var": {"chunks": (1080, 1080), "compressors": (blosc_zstd(),)}}``.
+    Variables packed to integers are range-checked (see ``check_packable``).
     """
     store = _open_zarr_store(url)
-    ds = _vlen_str_coords(ds)
+    ds = check_packable(_vlen_str_coords(ds), encoding)
     crs = ds.rio.crs.to_string()
     for da in ds.data_vars.values():
         da.attrs.update(_geozarr_attrs(da, crs))
