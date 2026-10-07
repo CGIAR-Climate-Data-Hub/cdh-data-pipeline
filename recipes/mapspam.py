@@ -11,6 +11,7 @@ from cdh_data_pipeline import (
     blosc_zstd,
     download_dataverse,
     open_raster,
+    read_manifest,
     run,
     write_cog,
     write_json,
@@ -168,6 +169,7 @@ def build_cogs():
 
 def write_metadata():
     write_json(f"{OUTPUT}/crop-codes.json", CROPS)
+    write_json(f"{OUTPUT}/sources.json", read_manifest(INPUT))
 
 
 if __name__ == "__main__":

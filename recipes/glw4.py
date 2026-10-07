@@ -8,14 +8,18 @@ import xarray as xr
 
 from cdh_data_pipeline import (
     blosc_zstd,
+    download,
     open_raster,
+    read_manifest,
     run,
     write_cog,
+    write_json,
     write_zarr,
 )
 
-# INPUT/OUTPUT may be local paths or object-storage URLs.
-INPUT = "https://storage.googleapis.com/fao-gismgr-glw4-2020-data/DATA/GLW4-2020/MAPSET/D-DA"
+SOURCE = "https://storage.googleapis.com/fao-gismgr-glw4-2020-data/DATA/GLW4-2020/MAPSET/D-DA"
+# INPUT is the local GeoTIFF cache. Gitignored under input/.
+INPUT = "input/glw4"
 OUTPUT = "s3://digital-atlas/cdh/data/glw4-2020"
 SRC = "GLW4-2020.D-DA.{code}.tif"
 
@@ -29,11 +33,20 @@ SPECIES = {
 }
 
 
+def fetch():
+    """Download the source GeoTIFFs into INPUT (skips any already present)."""
+    for code in SPECIES:
+        name = SRC.format(code=code)
+        download(f"{SOURCE}/{name}", f"{INPUT}/{name}")
+
+
 def load(code, name):
-    url = f"{INPUT}/{SRC.format(code=code)}"
-    da = open_raster(url, name)
+    src = SRC.format(code=code)
+    da = open_raster(f"{INPUT}/{src}", name)
     da.attrs.update(
-        long_name=f"{name.capitalize()} density", units="head/km2", source_url=url
+        long_name=f"{name.capitalize()} density",
+        units="head/km2",
+        source_url=f"{SOURCE}/{src}",
     )
     return da
 
@@ -55,14 +68,17 @@ def build_zarr():
 
 def build_cogs():
     for code, name in SPECIES.items():
-        url = f"{INPUT}/{SRC.format(code=code)}"
         write_cog(
             f"{OUTPUT}/cog/glw4-2020-{name}.tif",
-            [url],
+            [f"{INPUT}/{SRC.format(code=code)}"],
             [f"{name.capitalize()} density"],
             "head/km2",
         )
 
 
+def write_metadata():
+    write_json(f"{OUTPUT}/sources.json", read_manifest(INPUT))
+
+
 if __name__ == "__main__":
-    run(build_zarr, build_cogs)
+    run(fetch, build_zarr, build_cogs, write_metadata)

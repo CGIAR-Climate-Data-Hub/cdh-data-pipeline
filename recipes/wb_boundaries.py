@@ -12,7 +12,7 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 
-from cdh_data_pipeline import download, run, write_parquet
+from cdh_data_pipeline import download, read_manifest, run, write_json, write_parquet
 
 INPUT = Path("input/wb_boundaries")
 OUTPUT = "s3://digital-atlas/cdh/data/wb-boundaries-gad"
@@ -86,5 +86,9 @@ def build_parquet():
         write_parquet(df, f"{OUTPUT}/{name}.parquet", sort=df.columns[0])
 
 
+def write_metadata():
+    write_json(f"{OUTPUT}/sources.json", read_manifest(INPUT))
+
+
 if __name__ == "__main__":
-    run(fetch, build_parquet)
+    run(fetch, build_parquet, write_metadata)
