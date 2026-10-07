@@ -88,7 +88,9 @@ cdh/data/mapspam-2020-v2r3/
 - CF-style metadata (units, long_name, title, institution, references) lives
   *inside* the zarr attrs and COG band tags — the data is self-describing.
 - Dataset-level sidecars (code↔name tables, provenance) are JSON files at the
-  dataset root, written by the recipe (`write_json`).
+  dataset root, written by the recipe (`write_json`). Every dataset publishes
+  `sources.json`: the input manifest `download()` keeps (source URL, size,
+  SHA-256, retrieval time, upstream version) for the files it was built from.
 - STAC is static and colocated: item/collection JSON in the dataset prefix
   with relative asset hrefs, a root `catalog.json` at `cdh/data/`. A search
   API, if ever needed, harvests these; the static files stay the source of
@@ -100,6 +102,8 @@ cdh/data/mapspam-2020-v2r3/
   a recipe in this repo; nothing is hand-uploaded or hand-edited.
 - Rerunning a recipe is the only mutation path, and it rewrites a store
   wholesale rather than patching objects.
+  Exception: CHIRPS rewrites only the days of source files that are new or
+  changed upstream, falling back to a full rebuild (see the recipe).
 - Chunk/shard for the expected read pattern and say what that pattern is in a
   comment next to the encoding (see `recipes/mapspam.py`).
 - Prefer one store per dataset over many small stores; prefer variables and
