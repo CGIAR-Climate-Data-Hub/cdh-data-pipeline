@@ -56,7 +56,7 @@ def build_parquet():
     # Split on commas outside parentheses: comname and syno have items like
     # "pele (Tonga, Tuvalu)".
     for c in LISTS:
-        df[c] = df[c].str.split(r"\s*,\s*(?![^()]*\))", regex=True)
+        df[c] = df[c].str.split(r"\s*,[\s,]*(?![^()]*\))", regex=True)
     write_parquet(df.convert_dtypes(), OUTPUT, sort="ecoportcode")
 
 
