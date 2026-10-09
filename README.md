@@ -24,6 +24,8 @@ Pangeo Forge.
   - `cog.py`: COG conversion (`make_cog`, `write_cog`). Pass `cog_options=` to
     override GDAL creation options for a call.
 - `recipes/`: one script per ingested dataset
+  - `ecocrop.py`: FAO EcoCrop crop characteristics (from OpenCLIM/ecocrop)
+    as one Parquet table. Cleaned and typed only; no values corrected
   - `glw4.py`: GLW4 livestock density
   - `mapspam.py`: MapSPAM 2020 V2r2 crop statistics
   - `jrc_glofas.py`: JRC GloFAS flood hazard maps. Indexes the upstream tiled
