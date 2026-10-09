@@ -19,12 +19,11 @@ from cdh_data_pipeline import download, run, write_parquet
 INPUT = Path("input/ecocrop/EcoCrop_DB.csv")
 OUTPUT = "s3://digital-atlas/cdh/data/ecocrop/ecocrop.parquet"
 
-COMMIT = "ea43ecd418fd1a1ea08d32c7dce64b7fae02dec4"  # 2022-03-01
+COMMIT = "ea43ecd418fd1a1ea08d32c7dce64b7fae02dec4"  # from: 2022-03-01
 URL = f"https://raw.githubusercontent.com/OpenCLIM/ecocrop/{COMMIT}/EcoCrop_DB.csv"
 
-# Comma-joined multi-value columns; no vocabulary item contains a comma.
-# Listed by hand: scientificname and auth also contain commas that are not
-# separators ("Pinus merkusii, island provenances").
+# Comma-joined multi-value columns. Listed by hand: scientificname and auth
+# also contain commas that are not separators ("Pinus merkusii, island provenances").
 LISTS = [
     "syno",
     "comname",
@@ -52,11 +51,12 @@ def fetch():
 
 
 def build_parquet():
-    # pandas infers the numeric columns and treats both "NA" and "" as null.
     df = pd.read_csv(INPUT, encoding="cp1252")
     df.columns = df.columns.str.lower()
+    # Split on commas outside parentheses: comname and syno have items like
+    # "pele (Tonga, Tuvalu)".
     for c in LISTS:
-        df[c] = df[c].str.split(r"\s*,\s*", regex=True)
+        df[c] = df[c].str.split(r"\s*,\s*(?![^()]*\))", regex=True)
     write_parquet(df.convert_dtypes(), OUTPUT, sort="ecoportcode")
 
 
