@@ -10,8 +10,10 @@ from cdh_data_pipeline import (
     blosc_zstd,
     download,
     open_raster,
+    read_manifest,
     run,
     write_cog,
+    write_json,
     write_zarr,
 )
 
@@ -36,6 +38,20 @@ def fetch():
     for code in SPECIES:
         name = SRC.format(code=code)
         download(f"{SOURCE}/{name}", f"{INPUT}/{name}")
+<<<<<<< HEAD
+=======
+
+
+def load(code, name):
+    src = SRC.format(code=code)
+    da = open_raster(f"{INPUT}/{src}", name)
+    da.attrs.update(
+        long_name=f"{name.capitalize()} density",
+        units="head/km2",
+        source_url=f"{SOURCE}/{src}",
+    )
+    return da
+>>>>>>> 582c24725c781a5e1342ef0dea2a7a85f8386395
 
 
 def build_zarr():
@@ -78,5 +94,13 @@ def build_cogs():
         )
 
 
+def write_metadata():
+    write_json(f"{OUTPUT}/sources.json", read_manifest(INPUT))
+
+
 if __name__ == "__main__":
+<<<<<<< HEAD
     run(fetch, build_zarr, build_cogs)
+=======
+    run(fetch, build_zarr, build_cogs, write_metadata)
+>>>>>>> 582c24725c781a5e1342ef0dea2a7a85f8386395

@@ -9,6 +9,7 @@ authors = [{ name = "Brayden Youngberg", email = "bjyberg1@gmail.com" }]
 dependencies = [
     "dask>=2026.8.0",
     "geopandas>=1.1.4",  # GeoParquet 1.1: write_covering_bbox + hilbert_distance
+    "h5netcdf>=1.8.1",  # xarray engine for the CHIRPS NetCDF4 cache
     "obstore>=0.11.1",
     "pyarrow>=25.0.1",  # parquet writer backend
     "rasterio>=1.5.1",

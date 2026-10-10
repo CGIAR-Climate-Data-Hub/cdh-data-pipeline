@@ -20,6 +20,7 @@ Pangeo Forge.
     override GDAL creation options for a call.
 - `recipes/`: one script per ingested dataset
   - `glw4.py`: GLW4 livestock density
+  - `chirps.py`: CHIRPS v3 RNL daily rainfall as a sharded Zarr cube (int16, 0.1 mm)
   - `mapspam.py`: MapSPAM 2020 V2r2 crop statistics
   - `wb_boundaries.py`: World Bank Official Boundaries (admin 0 to 2 and ocean
     mask) as GeoParquet, plus the admin 1 and 2 attribute tables. Admin 0
@@ -46,6 +47,17 @@ uv run --env-file .env recipes/mapspam.py   # needs $DATAVERSE_TOKEN (see Creden
 
 Re-running overwrites the outputs. A `fetch` step skips source files that have
 already been downloaded locally.
+
+`download()` records every cached input in `input/<dataset>/manifest.json`:
+source URL, size, SHA-256, retrieval time and any upstream version (FTP
+modification time, HTTP ETag, Dataverse DOI/version/MD5). Each recipe publishes
+it as `sources.json` next to its outputs.
+
+CHIRPS: `uv run --env-file .env recipes/chirps.py` does the first build and every
+update. `fetch` follows the published store, not `input/`: it downloads only years
+the store lacks, so any machine can update it from an empty cache (and needs the
+AWS credentials even to download). To rebuild from scratch, delete the store. Run
+one writer at a time; read only stores whose `build_complete` attribute is true.
 
 ## Adding a dataset
 
