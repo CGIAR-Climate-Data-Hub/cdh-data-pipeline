@@ -1,6 +1,6 @@
 """Concrete daily variables, one entry per array a mission writes.
 
-Quantum choice, measured on eight days of CHIRTS-ERA5 (source 26.40 MB/day):
+Temperature quantum, measured on eight days of CHIRTS-ERA5 (source 26.40 MB/day):
 
 ==========  =========  ==========  ========
 quantum       MB/day     vs 0.01    max err
@@ -53,4 +53,30 @@ TMIN = MeteoVariable(
     valid_max=_T_VALID_MAX,
 )
 
-__all__ = ["TMAX", "TMIN"]
+#: CHIRPS v3.0 daily precipitation, read from the daily GeoTIFF archive.
+#:
+#: ``folder`` is empty because the archive has no per-variable level: rasters sit
+#: straight under ``<root>/<year>/``.
+#:
+#: ``fill`` is -9999 rather than int16's minimum because that is what the
+#: published cube already stores; changing it would invalidate every chunk
+#: written so far. Note the consequence: -9999 sits *inside* the int16 range, so
+#: unlike the temperature variables it does not shrink :attr:`store_bounds`.
+PRECIP = MeteoVariable(
+    key="precip",
+    nc_name="precip",
+    folder="",
+    dtype="int16",
+    scale=0.1,
+    offset=0.0,
+    fill=-9999,
+    units="mm",
+    long_name="CHIRPS v3.0 daily precipitation",
+    standard_name="precipitation_amount",
+    # CHIRPS daily maxima are observed around 750 mm; the int16 ceiling at this
+    # quantum is 3276 mm, so the bound flags corruption, not heavy rain.
+    valid_min=0.0,
+    valid_max=3276.0,
+)
+
+__all__ = ["PRECIP", "TMAX", "TMIN"]
