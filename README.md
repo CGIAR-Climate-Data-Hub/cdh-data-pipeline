@@ -26,6 +26,9 @@ Pangeo Forge.
 - `recipes/`: one script per ingested dataset
   - `ecocrop.py`: FAO EcoCrop crop characteristics (from OpenCLIM/ecocrop)
     as one Parquet table. Cleaned and typed only; no values corrected
+  - `esa_worldcover.py`: ESA WorldCover 2021 v200 land cover. Indexes the AWS
+    Open Data COGs in place as `map.vrt` (STAC items built from the tile grid)
+    plus `class-codes.json`; no data is copied
   - `glw4.py`: GLW4 livestock density
   - `mapspam.py`: MapSPAM 2020 V2r2 crop statistics
   - `jrc_glofas.py`: JRC GloFAS flood hazard maps. Indexes the upstream tiled
