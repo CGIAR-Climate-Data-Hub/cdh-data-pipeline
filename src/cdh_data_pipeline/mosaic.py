@@ -164,7 +164,7 @@ def _build(out, files, *, mosaic, relative=False):
 
 
 def _add_metadata(vrt_path, first_source, names=None, stats=None, compute_stats=False):
-    """Set nodata (from ``first_source``), band names, stats and virtual overviews.
+    """Set nodata, colormap (from ``first_source``), band names, stats and virtual overviews.
 
     rio-vrt drops nodata when stacking. Virtual overviews store nothing; reads fall
     through to the COGs' overviews. ``stats`` holds one dict or None per band.
@@ -183,6 +183,8 @@ def _add_metadata(vrt_path, first_source, names=None, stats=None, compute_stats=
             vrt.descriptions = names
         if first["overviews"]:
             vrt.build_overviews(first["overviews"], resampling)
+        if first["colormap"]:
+            vrt.write_colormap(1, first["colormap"])
         stats = list(stats or [])
         missing = [band for band, s in enumerate(stats, 1) if not s]
         if compute_stats and missing:
@@ -210,6 +212,9 @@ def _raster_info(path):
             "dtype": typename_fwd[dtype_rev[src.dtypes[0]]],
             "bands": src.count,
             "crs": src.crs,
+            "colormap": src.colormap(1)
+            if src.colorinterp[0].name == "palette"
+            else None,
         }
 
 
