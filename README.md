@@ -24,6 +24,10 @@ Pangeo Forge.
   - `cog.py`: COG conversion (`make_cog`, `write_cog`). Pass `cog_options=` to
     override GDAL creation options for a call.
 - `recipes/`: one script per ingested dataset
+  - `copernicus_dem.py`: Copernicus DEM GLO-30 and GLO-90. Indexes the AWS
+    Open Data COGs in place as STAC GeoParquet plus a GTI tile index per
+    product (`GTI:<url>/glo-90.gti.gpkg` opens as one global raster); no data
+    is copied
   - `ecocrop.py`: FAO EcoCrop crop characteristics (from OpenCLIM/ecocrop)
     as one Parquet table. Cleaned and typed only; no values corrected
   - `glw4.py`: GLW4 livestock density
