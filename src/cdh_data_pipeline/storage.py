@@ -29,17 +29,35 @@ def clear_store(store):
             store.delete(paths)
 
 
+# S3 stores whatever Content-Type the uploader sends, and obstore sends none.
+# VRTs get "attachment" so browsers download them instead of rendering the XML.
+_ATTRS = {
+    ".json": {"Content-Type": "application/json"},
+    ".vrt": {"Content-Type": "application/xml", "Content-Disposition": "attachment"},
+    ".gpkg": {"Content-Type": "application/geopackage+sqlite3"},
+    ".tif": {
+        "Content-Type": "image/tiff; application=geotiff; profile=cloud-optimized"
+    },
+}
+
+
+def put_bytes(url, data):
+    """Write bytes to a local path or object-store URL, with a Content-Type by suffix."""
+    prefix, _, name = url.rpartition("/")
+    # LocalStore raises NotImplementedError on any attributes
+    attrs = _ATTRS.get(Path(name).suffix) if "://" in url else None
+    open_store(prefix or ".").put(name, data, attributes=attrs)
+
+
 def write_json(url, data):
     """Write a dict as JSON to a local path or object-store URL."""
-    prefix, _, name = url.rpartition("/")
-    open_store(prefix or ".").put(name, json.dumps(data, indent=2).encode())
+    put_bytes(url, json.dumps(data, indent=2).encode())
     log.info("wrote %s", url)
 
 
 def put_file(url, path):
     """Upload a local file to a local path or object-store URL."""
-    prefix, _, name = url.rpartition("/")
-    open_store(prefix or ".").put(name, Path(path).read_bytes())
+    put_bytes(url, Path(path).read_bytes())
 
 
 def open_raster(url, name=None, *, chunks=None):
