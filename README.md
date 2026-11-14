@@ -22,6 +22,9 @@ Pangeo Forge.
   - `glw4.py`: GLW4 livestock density
   - `chirps.py`: CHIRPS v3 RNL daily rainfall as a sharded Zarr cube (int16, 0.1 mm)
   - `mapspam.py`: MapSPAM 2020 V2r2 crop statistics
+  - `soilgrids.py`: SoilGrids 2.0 1 km, 12 properties x 5 depths, reprojected
+    to a 1/120 deg lat/lon `(depth, lat, lon)` Zarr cube, plus a Hugging Face
+    `publish` step that runs only when named
   - `wb_boundaries.py`: World Bank Official Boundaries (admin 0 to 2 and ocean
     mask) as GeoParquet, plus the admin 1 and 2 attribute tables. Admin 0
     includes the disputed NDLSA areas. Filter on `wb_status`.
