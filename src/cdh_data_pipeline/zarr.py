@@ -51,11 +51,13 @@ def _open_zarr_store(url):
     return store
 
 
-def write_zarr(ds, url, encoding=None, *, consolidated=True):
+def write_zarr(ds, url, encoding=None, *, consolidated=True, compute=True):
     """Write a Dataset as a GeoZarr v3 store.
 
     ``encoding`` maps variable name to zarr encoding, e.g.
     ``{"var": {"chunks": (1080, 1080), "compressors": (blosc_zstd(),)}}``.
+    ``compute=False`` writes metadata and coords only, leaving dask arrays
+    empty to fill later.
     """
     store = _open_zarr_store(url)
     ds = _vlen_str_coords(ds)
@@ -69,6 +71,7 @@ def write_zarr(ds, url, encoding=None, *, consolidated=True):
         zarr_format=3,
         consolidated=consolidated,
         encoding=encoding,
+        compute=compute,
     )
     log.info("wrote %s", url)
 
