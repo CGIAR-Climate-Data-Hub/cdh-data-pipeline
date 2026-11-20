@@ -60,13 +60,15 @@ def put_file(url, path):
     put_bytes(url, Path(path).read_bytes())
 
 
-def open_raster(url, name=None, *, chunks=None):
+def open_raster(url, name=None, *, chunks=None, lock=None):
     """Read a raster as float32, nodata as NaN, attrs cleared.
 
     Single-band rasters drop the ``band`` dim; multi-band keep it (numbered 1..N).
     ``chunks=None`` loads eagerly; ``chunks=-1`` keeps it lazy as one dask chunk.
+    ``lock=False`` lets dask threads read in parallel, each with its own file
+    handle. The default lock serialises every read in the process.
     """
-    da = rxr.open_rasterio(url, masked=True, chunks=chunks)
+    da = rxr.open_rasterio(url, masked=True, chunks=chunks, lock=lock)
     assert isinstance(da, xr.DataArray)
     if "band" in da.dims and da.sizes["band"] == 1:
         da = da.squeeze("band", drop=True)
