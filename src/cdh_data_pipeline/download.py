@@ -23,7 +23,13 @@ def download(url, dest):
     log.info("downloading %s", dest.name)
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req) as r, open(part, "wb") as f:
+        expected = r.headers.get("Content-Length")
         shutil.copyfileobj(r, f)
+    # A server that drops the connection mid-body ends the read without an error.
+    got = part.stat().st_size
+    if expected is not None and got != int(expected):
+        part.unlink()
+        raise OSError(f"{dest.name}: got {got} of {expected} bytes; connection dropped")
     part.rename(dest)
     log.info("downloaded %s (%.0f MB)", dest.name, dest.stat().st_size / 1e6)
     return dest
