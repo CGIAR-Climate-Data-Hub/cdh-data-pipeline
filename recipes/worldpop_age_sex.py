@@ -1,17 +1,20 @@
 """WorldPop age and sex structures (R2025A, 1 km, UN-adjusted) -> Zarr store.
 
 Run from the repo root: uv run recipes/worldpop_age_sex.py
+Then, once the local store looks right: uv run recipes/worldpop_age_sex.py publish
 
 The source is one 15.6 GB zip per year (250 GB in all). The server ignores
-range requests and caps each connection at ~5-9 MB/s, so PREFETCH zips download
-in parallel while the current year is written. Each zip's 40 female and male
-GeoTIFFs are extracted (11 GB), written into the store as one year, then
-deleted. Local disk use peaks near (PREFETCH + 1) x 16 GB + 11 GB.
+range requests and caps each connection at ~5-9 MB/s, so fetch downloads
+PREFETCH zips at once. Each zip's 40 female and male GeoTIFFs are extracted
+(11 GB a year, 176 GB in all) and the zip deleted. A rerun skips years already
+extracted, so fetch resumes where it stopped.
 
-A rerun skips the years listed in INPUT/done.txt. Delete that file to rebuild
-from scratch.
+build_zarr writes the store locally, from scratch on every run (~7 min a year).
+publish uploads it to OUTPUT, replacing any published copy, and only runs when
+named.
 """
 
+import http.client
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from itertools import pairwise
@@ -23,18 +26,31 @@ import xarray as xr
 from zarr.codecs import ZstdCodec
 from zarr.storage import ObjectStore
 
-from cdh_data_pipeline import download, log, open_raster, open_store, run, write_zarr
+from cdh_data_pipeline import (
+    download,
+    log,
+    open_raster,
+    open_store,
+    run,
+    upload_dir,
+    write_zarr,
+)
 
 SOURCE = "https://data.worldpop.org/GIS/AgeSex_structures/Global_2015_2030/R2025A"
 ZIP = "{year}/0_Mosaicked/v1/1km_ua/global_agesex_structures_{year}_CN_1km_R2025A_UA_v1.zip"
 TIF = "global_{sex}_{age:02d}_{year}_CN_1km_R2025A_UA_v1.tif"
-# INPUT holds the zips in flight, the extracted year and the resume log.
+NAME = "worldpop-age-sex-1km-ua-r2025a-v1"
+# INPUT holds the zips in flight and one folder of GeoTIFFs per year.
 # Gitignored under input/.
 INPUT = "input/worldpop-age-sex"
-OUTPUT = "s3://digital-atlas/cdh/data/worldpop-age-sex-1km-ua-r2025a-v1"
-ZARR = f"{OUTPUT}/worldpop-age-sex-1km-ua-r2025a-v1.zarr"
+# The store is built here, then uploaded by publish. Gitignored under output/.
+LOCAL = f"output/{NAME}/{NAME}.zarr"
+OUTPUT = f"s3://digital-atlas/cdh/data/{NAME}"
+ZARR = f"{OUTPUT}/{NAME}.zarr"
 # Zips downloading at once. The server limits per connection, not in total.
 PREFETCH = 4
+# Attempts per zip before fetch gives up on it.
+RETRIES = 3
 
 YEARS = list(range(2015, 2031))
 # Lower bound of each age group in years: 0 (under 1), 1-4, 5-9, ..., 90+.
@@ -52,17 +68,22 @@ WIDTH, HEIGHT = 43200, 17280
 # Expected reads aggregate many age/sex layers over an area: "total population
 # of Kenya" (all 40 layers) or "working-age women in Kenya" (10 layers). So a
 # chunk holds every age and sex for one year, and an area read costs the same
-# few requests whatever layers it needs. Measured on 2020 over Kenya, a total
-# took 13 requests (46 MB) where one layer per chunk took 160 (94 MB).
-# 240 cells is 2 degrees (~220 km); a shard of 9x9 chunks is 18 degrees and the
-# grid splits into exactly 8x20 shards. A chunk is 9 MB uncompressed.
+# few requests whatever layers it needs. 240 cells is 2 degrees (~220 km);
+# a chunk is 9 MB uncompressed, 0.2-2 MB compressed.
+# Not sharded: GDAL reads sharded zarr only from 3.13, and CRAN's R binaries ship
+# 3.12 (Windows) and 3.8 (macOS). GDAL 3.12 reads this store. Measured on 2020
+# over Kenya, a total took 30 requests (46 MB); with 9x9-chunk shards it took 13,
+# and one layer per chunk took 160 (94 MB). Unsharded is ~4,600 objects a year
+# instead of ~124. Adding shards back is a rebuild or a repack with no change to
+# the chunks.
 CHUNKS = (1, len(AGES), len(SEXES), 240, 240)
-SHARDS = (1, len(AGES), len(SEXES), 2160, 2160)
+# Dask block: 9x9 chunks (18 degrees), so the grid splits into exactly 8x20
+# blocks and no two parallel writes touch the same chunk.
+BLOCK = 2160
 
 ENCODING = {
     "population": {
         "chunks": CHUNKS,
-        "shards": SHARDS,
         # Stored as int32 hundredths of a person. Measured on one layer: float32
         # is 2.7x larger, and float32 bit-rounded to 7 bits (0.4% error) 1.5x.
         # The global sum shifts by 1e-5, a cell by at most 0.005.
@@ -78,44 +99,76 @@ ENCODING = {
 }
 
 
-def fetch(year):
-    """Download one year's zip. Returns its local path."""
-    return download(f"{SOURCE}/{ZIP.format(year=year)}", f"{INPUT}/{year}.zip")
+def tif_path(year, age, sex):
+    return Path(INPUT) / str(year) / TIF.format(year=year, age=age, sex=sex)
 
 
 def extract(zip_path, year):
-    """Extract the year's female and male GeoTIFFs. Returns their directory.
+    """Extract the year's female and male GeoTIFFs, skipping any already there.
 
     GDAL can read inside the zip, but each TIF is deflated, so every windowed
     read re-inflates from the start of the file.
     """
-    dest = Path(INPUT) / str(year)
-    dest.mkdir(exist_ok=True)
-    names = [TIF.format(year=year, age=a, sex=s) for a in AGES for s in SEXES]
-    todo = [n for n in names if not (dest / n).exists()]
+    (Path(INPUT) / str(year)).mkdir(parents=True, exist_ok=True)
+    todo = [p for a in AGES for s in SEXES if not (p := tif_path(year, a, s)).exists()]
 
-    def one(name):
-        part = dest / f"{name}.part"
-        with zipfile.ZipFile(zip_path) as z, z.open(name) as src, open(part, "wb") as f:
+    def one(path):
+        # Written to .part first, so a cut-off extract never looks finished.
+        part = path.with_name(path.name + ".part")
+        with (
+            zipfile.ZipFile(zip_path) as z,
+            z.open(path.name) as src,
+            open(part, "wb") as f,
+        ):
             while buf := src.read(1 << 24):
                 f.write(buf)
-        part.rename(dest / name)
+        part.rename(path)
 
     # zlib releases the GIL, so threads inflate in parallel.
     with ThreadPoolExecutor(8) as pool:
         list(pool.map(one, todo))
-    return dest
 
 
-def open_year(tif_dir, year):
+def fetch_year(year):
+    """Download and extract one year, unless its GeoTIFFs are all present."""
+    if all(tif_path(year, a, s).exists() for a in AGES for s in SEXES):
+        return
+    url = f"{SOURCE}/{ZIP.format(year=year)}"
+    # The server sometimes drops a connection mid-download (seen on 4 of 15
+    # zips, some after 40 MB); download() then raises, so retry from scratch.
+    for attempt in range(1, RETRIES + 1):
+        try:
+            zip_path = download(url, f"{INPUT}/{year}.zip")
+            break
+        except (OSError, http.client.HTTPException) as e:
+            log.warning("%d: attempt %d/%d failed: %s", year, attempt, RETRIES, e)
+            if attempt == RETRIES:
+                raise
+    try:
+        extract(zip_path, year)
+    except zipfile.BadZipFile:
+        # Truncated or corrupt (a CRC mismatch raises this too): drop it so a
+        # rerun downloads it again instead of failing on the same file.
+        zip_path.unlink()
+        raise
+    zip_path.unlink()
+    log.info("fetched %d", year)
+
+
+def fetch():
+    """Download and extract every year, PREFETCH at a time."""
+    with ThreadPoolExecutor(PREFETCH) as pool:
+        list(pool.map(fetch_year, YEARS))
+
+
+def open_year(year):
     """One year as a lazy population(year, age_group, sex, y, x) dataset."""
 
     def layer(age, sex):
-        path = tif_dir / TIF.format(year=year, age=age, sex=sex)
         # lock=False: decoding the 40 LZW TIFs was the bottleneck under the
         # default lock (3.8x slower reads, ~2.4 of 16 cores busy).
-        chunks = {"y": SHARDS[-2], "x": SHARDS[-1]}
-        return open_raster(str(path), chunks=chunks, lock=False)
+        chunks = {"y": BLOCK, "x": BLOCK}
+        return open_raster(str(tif_path(year, age, sex)), chunks=chunks, lock=False)
 
     # join="override": take the first raster's grid, skip coordinate alignment.
     da = xr.concat(
@@ -127,7 +180,7 @@ def open_year(tif_dir, year):
         join="override",
     )
     assert da.sizes["x"] == WIDTH and da.sizes["y"] == HEIGHT, da.sizes
-    # One dask chunk per shard, so parallel writes never share a shard.
+    # Every age and sex in each dask block, matching the zarr chunks.
     da = da.chunk({"age_group": -1, "sex": -1})
     da = da.expand_dims(year=[year]).assign_coords(
         x=-180 + (np.arange(WIDTH) + 0.5) * RES,
@@ -149,36 +202,22 @@ def open_year(tif_dir, year):
 
 
 def build_zarr():
-    done_log = Path(INPUT) / "done.txt"
-    done = done_log.read_text().split() if done_log.exists() else []
-    todo = [y for y in YEARS if str(y) not in done]
-    pool = ThreadPoolExecutor(PREFETCH)
-    # Submitted in order, so the pool downloads the next PREFETCH years.
-    zips = {year: pool.submit(fetch, year) for year in todo}
-    try:
-        for year in todo:
-            zip_path = zips.pop(year).result()
-            tif_dir = extract(zip_path, year)
-            ds = open_year(tif_dir, year)
-            if not done:
-                # Empty store covering every year. Each year then fills its own slot.
-                empty = ds.reindex(year=YEARS)
-                write_zarr(empty, ZARR, ENCODING, compute=False)
-            # A region write only accepts variables on the region's dimension.
-            ds = ds.drop_vars([c for c in ds.coords if c != "year"])
-            ds.to_zarr(ObjectStore(open_store(ZARR)), region="auto")
-            # Log only after the write, so a crash redoes the year.
-            done.append(str(year))
-            done_log.write_text("\n".join(done))
-            for tif in tif_dir.iterdir():
-                tif.unlink()
-            tif_dir.rmdir()
-            zip_path.unlink()
-            log.info("wrote %d (%d/%d)", year, len(done), len(YEARS))
-    finally:
-        # On failure, drop queued downloads. Ones in flight still finish before exit.
-        pool.shutdown(wait=False, cancel_futures=True)
+    """Write every year into the local store, from scratch."""
+    for i, year in enumerate(YEARS):
+        ds = open_year(year)
+        if i == 0:
+            # Empty store covering every year. Each year then fills its own slot.
+            write_zarr(ds.reindex(year=YEARS), LOCAL, ENCODING, compute=False)
+        # A region write only accepts variables on the region's dimension.
+        ds = ds.drop_vars([c for c in ds.coords if c != "year"])
+        ds.to_zarr(ObjectStore(open_store(LOCAL)), region="auto")
+        log.info("wrote %d (%d/%d)", year, i + 1, len(YEARS))
+
+
+def publish():
+    """Upload the local store to OUTPUT, replacing any published copy."""
+    upload_dir(LOCAL, ZARR)
 
 
 if __name__ == "__main__":
-    run(build_zarr)
+    run(fetch, build_zarr, optional=(publish,))
