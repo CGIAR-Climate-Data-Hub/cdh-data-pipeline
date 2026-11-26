@@ -1,7 +1,8 @@
 """WorldPop age and sex structures (R2025A, 1 km, UN-adjusted) -> Zarr store.
 
 Run from the repo root: uv run recipes/worldpop_age_sex.py
-Then, once the local store looks right: uv run recipes/worldpop_age_sex.py publish
+Then, once the local store looks right:
+    uv run --env-file .env recipes/worldpop_age_sex.py publish
 
 The source is one 15.6 GB zip per year (250 GB in all). The server ignores
 range requests and caps each connection at ~5-9 MB/s, so fetch downloads
@@ -11,7 +12,9 @@ extracted, so fetch resumes where it stopped.
 
 build_zarr writes the store locally, from scratch on every run (~7 min a year).
 publish uploads it to OUTPUT, replacing any published copy, and only runs when
-named.
+named. It starts over if interrupted (46 GB, ~73k files). To finish an
+interrupted upload, or to update only what changed after a rebuild, sync with
+rclone instead (rclone sync <LOCAL> s3:<bucket/path of ZARR> --checksum).
 """
 
 import http.client
