@@ -1,6 +1,7 @@
 """Object-store access and raster loading."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import rioxarray as rxr
@@ -58,6 +59,30 @@ def write_json(url, data):
 def put_file(url, path):
     """Upload a local file to a local path or object-store URL."""
     put_bytes(url, Path(path).read_bytes())
+
+
+def upload_dir(src, url, *, workers=16):
+    """Upload a local directory to ``url``, deleting whatever was there first.
+
+    zarr.json files go last, so the store has no metadata until its chunks are
+    all up. Large files are sent as multipart uploads.
+    """
+    src = Path(src)
+    # Clearing a prefix is destructive: only replace a copy of this directory.
+    if url.rstrip("/").rsplit("/", 1)[-1] != src.name:
+        raise ValueError(f"{url} does not end in {src.name}; refusing to clear it")
+    files = [p for p in src.rglob("*") if p.is_file()]
+    store = open_store(url)
+    clear_store(store)
+
+    def put(path):
+        store.put(path.relative_to(src).as_posix(), path)
+
+    with ThreadPoolExecutor(workers) as pool:
+        list(pool.map(put, [p for p in files if p.name != "zarr.json"]))
+        list(pool.map(put, [p for p in files if p.name == "zarr.json"]))
+    size = sum(p.stat().st_size for p in files)
+    log.info("uploaded %s (%d files, %.1f GB)", url, len(files), size / 1e9)
 
 
 def open_raster(url, name=None, *, chunks=None, lock=None):
