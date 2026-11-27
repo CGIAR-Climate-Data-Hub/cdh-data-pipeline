@@ -70,8 +70,10 @@ To start again from nothing, delete `SPEI_OUTPUT` (store, `inputs.json`,
 
 * The grid has 192 tiles of 300 x 300 cells. Each tile with land streams its
   daily inputs (CHIRPS and both CHIRTS variables) for 1981 to now and needs
-  about 1-2 GB of memory. On a laptop, the MOSAIC pilot tile took the time
-  shown in `pilot` logs; multiply by the number of land tiles for an estimate.
+  about 1-2 GB of memory. In the pilots (laptop, home connection) one land
+  tile took 2-3.5 minutes with `hargreaves` and 1-2 minutes with `agera5`,
+  almost all of it reading the inputs; fitting and writing take seconds. With
+  well over 100 land tiles, plan for several hours to most of a day.
 * Tiles of open ocean are recorded with `land_cells: 0` and skipped quickly.
 * Each tile is logged as it is finished, with its land cells and the days with
   Tmin > Tmax. Those counts per cell are written to `diagnostics/`.

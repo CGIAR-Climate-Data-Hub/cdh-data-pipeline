@@ -297,10 +297,14 @@ def _tile_spei(root, tile, area, months, w, rows=None):
     name = C.spei_name(w)
     if rows is None:
         d = root["precip"][:, ry, rx].astype("f8") - root["pet"][:, ry, rx]
-        values, params = S.spei(d, months, w, CALIBRATION)
+        tot = S.rolling_sum(d, w)
+        # Transform with the parameters exactly as stored (float32), so a later
+        # update, which reads them back, reproduces these values bit for bit.
+        params = S.fit_params(tot, months, CALIBRATION).astype("f4")
+        values = S.spei_from_params(tot, months, params.astype("f8"))
         root[name][:, ry, rx] = C.encode_spei(values)
         for i, p in enumerate(("xi", "alpha", "k")):
-            root[f"{name}_{p}"][:, ry, rx] = params[:, i].astype("f4")
+            root[f"{name}_{p}"][:, ry, rx] = params[:, i]
         return int(np.isfinite(params[:, 0]).any(0).sum())
     start = max(rows.start - (w - 1), 0)
     d = root["precip"][start : rows.stop, ry, rx].astype("f8")
