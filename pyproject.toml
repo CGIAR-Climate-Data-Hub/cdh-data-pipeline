@@ -20,6 +20,10 @@ dependencies = [
     "zarr>=3.4.0",
 ]
 
+[project.optional-dependencies]
+# Hugging Face publishing (cdh_data_pipeline.hf); Xet for large binary uploads.
+hf = ["huggingface-hub[hf-xet]>=1.0"]
+
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]
 build-backend = "uv_build"

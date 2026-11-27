@@ -27,16 +27,18 @@ def _exit(code):
     os._exit(code)
 
 
-def run(*builders):
+def run(*builders, on_request=()):
     """Run build steps in order; exit 1 on the first failure.
 
     Pass step names to run a subset: ``uv run recipes/mapspam.py build_cogs``.
+    Steps in ``on_request`` (publishing, which is outward-facing) run only when
+    named, never as part of a bare run.
     """
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
     )
-    steps = {b.__name__: b for b in builders}
-    names = sys.argv[1:] or list(steps)
+    steps = {b.__name__: b for b in (*builders, *on_request)}
+    names = sys.argv[1:] or [b.__name__ for b in builders]
     if unknown := set(names) - steps.keys():
         sys.exit(f"unknown step(s) {sorted(unknown)}; choose from {list(steps)}")
     try:

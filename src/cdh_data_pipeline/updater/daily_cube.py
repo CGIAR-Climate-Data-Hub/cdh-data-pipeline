@@ -75,6 +75,33 @@ def read_json(url: str) -> dict:
         raise
 
 
+def convert_legacy_state(old: Mapping, variables: Sequence[MeteoVariable]) -> dict:
+    """Turn a GeoSPOptimizer state file into this updater's format.
+
+    The old updater kept ``{date: {"signature", "ingested", "source", ...}}``
+    per variable, or, in its first single-variable form, directly under
+    ``days``. Only the signature is carried over: it is what decides whether a
+    day is current. Re-recording from the archive instead would stamp days that
+    CHC has since republished as current, and they would never be re-ingested.
+    """
+    days = dict(old.get("days", {}))
+    keys = [v.key for v in variables]
+    if days and not set(days) <= set(keys):
+        if len(keys) != 1:
+            raise ValueError(
+                f"legacy state has keys {sorted(days)[:3]}..., not variables {keys}"
+            )
+        days = {keys[0]: days}
+    state = {k: v for k, v in old.items() if k not in {"days", "migrated_from"}}
+    state["days"] = {
+        var: {
+            d: e["signature"] if isinstance(e, dict) else e for d, e in bucket.items()
+        }
+        for var, bucket in days.items()
+    }
+    return state
+
+
 @dataclass
 class CubePlan:
     """What an update would do, per variable, before it does it."""
@@ -135,6 +162,10 @@ class CubeUpdater:
         holds what the caller thinks. Recording state writes down whatever it is
         told, so an unverified guess becomes a wrong label that later updates act
         on.
+    legacy_state
+        Url of a state file written by the GeoSPOptimizer updater
+        (``<store>.update-state.json``). Read once, when this updater has no
+        state of its own yet, and converted; see :func:`convert_legacy_state`.
     """
 
     def __init__(
@@ -148,8 +179,10 @@ class CubeUpdater:
         workers: int = 1,
         verify: Callable[[], None] | None = None,
         extra_state: Mapping | None = None,
+        legacy_state: str | None = None,
     ):
         self.url = url.rstrip("/")
+        self.legacy_state = legacy_state
         self.remote = remote
         self.variables = list(variables)
         self.grid = grid
@@ -166,6 +199,36 @@ class CubeUpdater:
 
     def load_state(self) -> dict:
         state = read_json(self.state_url)
+        if not state and self.legacy_state:
+            old = read_json(self.legacy_state)
+            if old:
+                state = convert_legacy_state(old, self.variables)
+                clash = {
+                    k: (state[k], v)
+                    for k, v in self.extra_state.items()
+                    if k in state and state[k] != v
+                }
+                if clash:
+                    raise ValueError(
+                        f"{self.legacy_state} disagrees with this recipe "
+                        f"(legacy, recipe): {clash}"
+                    )
+                state.update(self.extra_state)
+                state["adopted_from"] = self.legacy_state
+                self.save_state(state)
+                log.info(
+                    "adopted %s: %s",
+                    self.legacy_state,
+                    {k: len(v) for k, v in state["days"].items()},
+                )
+        # One state file per prefix: two datasets sharing a prefix would read
+        # each other's days and skip or re-ingest the wrong ones.
+        mine, theirs = self.extra_state.get("mission"), state.get("mission")
+        if mine and theirs and mine != theirs:
+            raise ValueError(
+                f"{self.state_url} belongs to {theirs!r}, not {mine!r}; give each "
+                "dataset its own OUTPUT prefix"
+            )
         state.setdefault("days", {})
         return state
 
@@ -287,9 +350,9 @@ class CubeUpdater:
         newest = max(r.day for v in self.variables for r in plan.for_variable(v.key))
         axis = self._axis(root)
         if newest > axis[-1]:
-            n = (
-                np.datetime64(newest, "D") - np.datetime64(axis[0], "D")
-            ).astype(int) + 1
+            n = (np.datetime64(newest, "D") - np.datetime64(axis[0], "D")).astype(
+                int
+            ) + 1
             stored = np.asarray(root["time"][:])
             for var in self.variables:
                 a = root[var.nc_name]
@@ -317,7 +380,10 @@ class CubeUpdater:
                 if progress:
                     log.info(
                         "  %s: %s -> %s (%d day(s))",
-                        var.key, run[0].day, run[-1].day, len(run),
+                        var.key,
+                        run[0].day,
+                        run[-1].day,
+                        len(run),
                     )
                 paths = self.remote.download_many(
                     run, self.cache_dir, workers=self.workers, progress=progress
@@ -385,7 +451,8 @@ class CubeUpdater:
             if progress:
                 log.warning(
                     "%d day(s) could not be read and stay nodata; "
-                    "they will be retried next run", len(failed),
+                    "they will be retried next run",
+                    len(failed),
                 )
                 for f in failed[:10]:
                     log.warning("    %s", f)
@@ -403,9 +470,7 @@ class CubeUpdater:
             log.info("plan: %s", plan.describe())
         if dry_run or plan.empty:
             return {"plan": plan.describe(), "written": 0, "dry_run": dry_run}
-        result = self.apply(
-            plan, keep_downloads=keep_downloads, progress=progress
-        )
+        result = self.apply(plan, keep_downloads=keep_downloads, progress=progress)
         result["plan"] = plan.describe()
         return result
 

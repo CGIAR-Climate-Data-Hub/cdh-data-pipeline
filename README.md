@@ -18,9 +18,16 @@ Pangeo Forge.
   - `parquet.py`: Parquet and GeoParquet 1.1 writing (`write_parquet`)
   - `cog.py`: COG conversion (`make_cog`, `write_cog`). Pass `cog_options=` to
     override GDAL creation options for a call.
+  - `hf.py`: Hugging Face publishing (`publish`). Sends only the files whose
+    content differs from the repo, chunks before metadata, then confirms the
+    repo matches. Needs the `hf` extra.
+  - `updater/`: incremental updates for the daily CHC cubes (`CubeUpdater`)
 - `recipes/`: one script per ingested dataset
   - `glw4.py`: GLW4 livestock density
   - `chirps.py`: CHIRPS v3 RNL daily rainfall as a sharded Zarr cube (int16, 0.1 mm)
+  - `chirps_era5.py`, `chirts_era5.py`: the GDAL-readable daily CHIRPS-RNL and
+    CHIRTS-ERA5 cubes, updated from CHC day by day and published to Hugging
+    Face by a `publish` step that runs only when named
   - `mapspam.py`: MapSPAM 2020 V2r2 crop statistics
   - `wb_boundaries.py`: World Bank Official Boundaries (admin 0 to 2 and ocean
     mask) as GeoParquet, plus the admin 1 and 2 attribute tables. Admin 0
@@ -58,6 +65,22 @@ update. `fetch` follows the published store, not `input/`: it downloads only yea
 the store lacks, so any machine can update it from an empty cache (and needs the
 AWS credentials even to download). To rebuild from scratch, delete the store. Run
 one writer at a time; read only stores whose `build_complete` attribute is true.
+
+Daily CHC cubes on Hugging Face (`chirps_era5.py`, `chirts_era5.py`):
+
+```sh
+uv run recipes/chirps_era5.py update write_sources   # new and republished days
+uv run recipes/chirps_era5.py publish_plan           # what would be sent
+uv run recipes/chirps_era5.py publish                # send it, then confirm
+```
+
+`publish` needs a write token (`hf auth login` or `HF_TOKEN`). It refuses a store
+without `build_complete`, a store shorter than the repo's copy (an old copy
+published over a newer one), and deleting more than 1% of the repo's store files.
+Each dataset needs its own `OUTPUT` folder: the updater keeps one
+`update-state.json` per folder and refuses another dataset's. A store last
+updated by GeoSPOptimizer has its state converted on the first run, from
+`<store>.update-state.json` (CHIRPS) or `<store>.chirts-state.json` (CHIRTS).
 
 ## Adding a dataset
 

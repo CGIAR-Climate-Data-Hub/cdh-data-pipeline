@@ -7,6 +7,8 @@ delete the store and run it again. Individual steps:
     uv run recipes/chirps_era5.py update          # skip the archive build
     uv run recipes/chirps_era5.py verify_archive  # check the source rasters first
     uv run recipes/chirps_era5.py detect          # which flavour does the cube hold?
+    uv run recipes/chirps_era5.py publish_plan    # what publish would send to Hugging Face
+    uv run recipes/chirps_era5.py publish         # send it (never part of a bare run)
 
 Not the same dataset as ``recipes/chirps.py``
 ---------------------------------------------
@@ -62,6 +64,7 @@ from cdh_data_pipeline import (
     GridSpec,
     RasterCubeBuilder,
     cube_store,
+    hf,
     log,
     run,
     write_json,
@@ -75,6 +78,17 @@ ARCHIVE = os.environ.get("CHIRPS_ARCHIVE", "input/chirps-v3-daily")
 OUTPUT = os.environ.get("CHIRPS_DAILY_OUTPUT", "output/chirps-v3-daily-rnl")
 STORE_NAME = "chirps-v3-daily-rnl.zarr"
 URL = f"{OUTPUT}/{STORE_NAME}"
+#: Hugging Face dataset repo; the store sits at ``<STORE_NAME>/`` inside it.
+HF_REPO = os.environ.get("CHIRPS_HF_REPO", "aaguilar90/chirps-v3-daily-rnl")
+#: Sidecars published at the repo root, each only if present. ``update-state.json``
+#: goes too, so any machine can pick the updates up from the repo; the card and
+#: the CDH record (``chirps-v3-daily-rnl.yaml``) are written outside this recipe for now.
+HF_SIDECARS = (
+    "README.md",
+    "sources.json",
+    "update-state.json",
+    "chirps-v3-daily-rnl.yaml",
+)
 
 #: The production archive. ``sat`` is a different product, not newer coverage.
 FLAVOUR = "rnl"
@@ -126,6 +140,8 @@ def _updater(verify=None) -> CubeUpdater:
         require_complete_months=True,
         workers=FETCH_WORKERS,
         verify=verify,
+        # A store last updated by GeoSPOptimizer keeps its state beside it.
+        legacy_state=f"{URL}.update-state.json",
         extra_state={
             "mission": "chirps-v3-daily",
             "flavour": FLAVOUR,
@@ -171,9 +187,7 @@ def detect_flavour(candidates=("sat", "rnl"), n_days=3, cache="input/_flavour") 
         .tolist()
     )
     sample = np.asarray(root[PRECIP.nc_name][:, ::101, ::401])
-    present = [
-        d for d, ok in zip(days, (sample != PRECIP.fill).any(axis=(1, 2))) if ok
-    ]
+    present = [d for d, ok in zip(days, (sample != PRECIP.fill).any(axis=(1, 2))) if ok]
     if not present:
         raise RuntimeError("cube holds no data to compare against")
     # Sample from the late record: every flavour covers it, unlike the 1980s.
@@ -213,7 +227,9 @@ def detect_flavour(candidates=("sat", "rnl"), n_days=3, cache="input/_flavour") 
         err = results[flavour]["max_abs_error_mm"]
         log.info(
             "  %-4s %-24s max error %s",
-            flavour, verdict, "n/a" if err is None else f"{err:.4f} mm",
+            flavour,
+            verdict,
+            "n/a" if err is None else f"{err:.4f} mm",
         )
     matched = [f for f, r in results.items() if r["matches"]]
     return {
@@ -272,9 +288,7 @@ def build_zarr():
         log.info("%s already built; skipping to update", URL)
         return
     result = _builder().run(URL)
-    log.info(
-        "built %s: %d day(s), %.2f GB", URL, result["days"], result["bytes"] / 1e9
-    )
+    log.info("built %s: %d day(s), %.2f GB", URL, result["days"], result["bytes"] / 1e9)
     if result["unreadable"]:
         log.warning(
             "%d day(s) left nodata by unreadable source rasters; the update step "
@@ -292,7 +306,8 @@ def update():
     if result.get("written"):
         log.info(
             "wrote %d day(s); coverage now %s",
-            result["written"], " -> ".join(result["coverage"]),
+            result["written"],
+            " -> ".join(result["coverage"]),
         )
 
 
@@ -318,5 +333,30 @@ def write_sources():
     )
 
 
+def publish_plan():
+    """Report what ``publish`` would send to Hugging Face. Sends nothing."""
+    log.info(
+        "plan for %s: %s",
+        HF_REPO,
+        hf.publish(OUTPUT, HF_REPO, STORE_NAME, HF_SIDECARS, dry_run=True),
+    )
+
+
+def publish():
+    """Send the files that differ from the Hugging Face repo, then confirm it matches.
+
+    Run ``write_sources`` first so ``sources.json`` describes what is sent.
+    """
+    start, end = _updater().cube_span()
+    result = hf.publish(
+        OUTPUT,
+        HF_REPO,
+        STORE_NAME,
+        HF_SIDECARS,
+        message=f"{STORE_NAME}: coverage {start} to {end}",
+    )
+    log.info("published: %s", result)
+
+
 if __name__ == "__main__":
-    run(build_zarr, update, write_sources)
+    run(build_zarr, update, write_sources, on_request=(publish_plan, publish))

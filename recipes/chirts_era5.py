@@ -6,6 +6,8 @@ delete the store and run it again. Individual steps:
 
     uv run recipes/chirts_era5.py update          # skip the archive build
     uv run recipes/chirts_era5.py verify_archive  # check the source rasters first
+    uv run recipes/chirts_era5.py publish_plan    # what publish would send to Hugging Face
+    uv run recipes/chirts_era5.py publish         # send it (never part of a bare run)
 
 Two sources, deliberately:
 
@@ -36,6 +38,7 @@ from cdh_data_pipeline import (
     GridSpec,
     RasterCubeBuilder,
     cube_store,
+    hf,
     log,
     run,
     write_json,
@@ -48,6 +51,17 @@ ARCHIVE = os.environ.get("CHIRTS_ARCHIVE", "input/chirts-era5")
 OUTPUT = os.environ.get("CHIRTS_OUTPUT", "output/chirts-era5-daily")
 STORE_NAME = "chirts-era5-daily.zarr"
 URL = f"{OUTPUT}/{STORE_NAME}"
+#: Hugging Face dataset repo; the store sits at ``<STORE_NAME>/`` inside it.
+HF_REPO = os.environ.get("CHIRTS_HF_REPO", "aaguilar90/chirts-era5-daily")
+#: Sidecars published at the repo root, each only if present. ``update-state.json``
+#: goes too, so any machine can pick the updates up from the repo; the card and
+#: the CDH record (``chirts-era5-daily.yaml``) are written outside this recipe for now.
+HF_SIDECARS = (
+    "README.md",
+    "sources.json",
+    "update-state.json",
+    "chirts-era5-daily.yaml",
+)
 
 #: First year of the TIME AXIS, not merely a filter: a Zarr time axis only grows
 #: forward, so days before this cannot be backfilled without a full rebuild.
@@ -63,9 +77,7 @@ MIN_INTERVAL = 1.0
 
 VARIABLES = [TMAX, TMIN]
 
-CHIRTS_GRID = GridSpec(
-    height=2600, width=7200, res=0.05, north=70.0, nodata=-9999.0
-)
+CHIRTS_GRID = GridSpec(height=2600, width=7200, res=0.05, north=70.0, nodata=-9999.0)
 
 ATTRS = {
     "title": "CHIRTS-ERA5 daily maximum and minimum temperature",
@@ -98,6 +110,8 @@ def _updater() -> CubeUpdater:
         # CHIRTS publishes day by day; see the module docstring.
         require_complete_months=False,
         workers=FETCH_WORKERS,
+        # A store last updated by GeoSPOptimizer keeps its state beside it.
+        legacy_state=f"{URL}.chirts-state.json",
         extra_state={"mission": "chirts-era5", "archive": ChirtsArchive.BASE},
     )
 
@@ -149,7 +163,9 @@ def build_zarr():
     result = builder.run(URL)
     log.info(
         "built %s: %d day(s), %.2f GB",
-        URL, result["days"], result["bytes"] / 1e9,
+        URL,
+        result["days"],
+        result["bytes"] / 1e9,
     )
     if result["unreadable"]:
         log.warning(
@@ -168,7 +184,8 @@ def update():
     if result.get("written"):
         log.info(
             "wrote %d day(s); coverage now %s",
-            result["written"], " -> ".join(result["coverage"]),
+            result["written"],
+            " -> ".join(result["coverage"]),
         )
 
 
@@ -194,5 +211,30 @@ def write_sources():
     )
 
 
+def publish_plan():
+    """Report what ``publish`` would send to Hugging Face. Sends nothing."""
+    log.info(
+        "plan for %s: %s",
+        HF_REPO,
+        hf.publish(OUTPUT, HF_REPO, STORE_NAME, HF_SIDECARS, dry_run=True),
+    )
+
+
+def publish():
+    """Send the files that differ from the Hugging Face repo, then confirm it matches.
+
+    Run ``write_sources`` first so ``sources.json`` describes what is sent.
+    """
+    start, end = _updater().cube_span()
+    result = hf.publish(
+        OUTPUT,
+        HF_REPO,
+        STORE_NAME,
+        HF_SIDECARS,
+        message=f"{STORE_NAME}: coverage {start} to {end}",
+    )
+    log.info("published: %s", result)
+
+
 if __name__ == "__main__":
-    run(build_zarr, update, write_sources)
+    run(build_zarr, update, write_sources, on_request=(publish_plan, publish))
