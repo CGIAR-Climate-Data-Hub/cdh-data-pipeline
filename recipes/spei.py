@@ -23,7 +23,8 @@ Settings come from environment variables:
                   of the dataset id, so the two never share a store.
 ``SPEI_OUTPUT``   folder for the store and its sidecars.
 ``SPEI_BBOX``     ``W,S,E,N`` to build only part of the grid (pilots).
-``SPEI_WINDOWS``  comma-separated windows in months, default ``3``.
+``SPEI_WINDOWS``  comma-separated windows in months, default ``3``. Windows
+                  already in the store are always kept (see ``_windows``).
 ``SPEI_THROUGH``  ``YYYY-MM``: last month to build (default: the latest month
                   complete in every input).
 ``SPEI_WORKERS``  parallel reads per input (default 8).
@@ -31,20 +32,27 @@ Settings come from environment variables:
 
 Adding a window later (e.g. ``SPEI_WINDOWS=3,6,12``) adds its arrays and runs
 only the ``spei`` step for it; the monthly inputs are reused from the store.
+A run never drops a window: one left out of ``SPEI_WINDOWS`` is still built,
+updated, verified and described.
 """
 
 import json
 import os
+import re
 import subprocess
 from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
 
 import numpy as np
+import zarr
 
 from cdh_data_pipeline import GridSpec, hf, log, run, write_json
 from cdh_data_pipeline import spei as S
 from cdh_data_pipeline import spei_cube as C
 
+if "PET_SOURCE" in os.environ:
+    raise SystemExit("set SPEI_PET (hargreaves or agera5), not PET_SOURCE")
 PET = os.environ.get("SPEI_PET", "hargreaves")
 if PET not in S.PET_METHODS:
     raise SystemExit(f"SPEI_PET must be one of {S.PET_METHODS}, not {PET!r}")
@@ -61,7 +69,10 @@ BBOX = (
     if os.environ.get("SPEI_BBOX")
     else None
 )
-WINDOWS = tuple(int(w) for w in os.environ.get("SPEI_WINDOWS", "3").split(","))
+#: Windows asked for in this run; ``_windows()`` adds those already in the store.
+REQUESTED_WINDOWS = tuple(
+    int(w) for w in os.environ.get("SPEI_WINDOWS", "3").split(",")
+)
 THROUGH = os.environ.get("SPEI_THROUGH")
 WORKERS = int(os.environ.get("SPEI_WORKERS", "8"))
 
@@ -86,12 +97,106 @@ PET_TEXT = {
     "hargreaves": "Hargreaves-Samani reference evapotranspiration (FAO-56 eq. 52) "
     "from CHIRTS-ERA5 daily Tmax and Tmin",
     "agera5": "AgERA5 FAO-56 Penman-Monteith reference evapotranspiration, "
-    "regridded bilinearly from 0.1 deg",
+    "summed to months on its 0.1 deg grid and regridded bilinearly to 0.05 deg",
 }
 DISTRIBUTION = (
     "generalized logistic (the three-parameter log-logistic of the SPEI papers)"
 )
 FITTING = "unbiased probability-weighted moments (L-moments), Hosking 1990"
+
+#: Dataset-card section per PET source. The figures come from the pilots of
+#: 2026-11-26 (1981-01 to 2026-10, SPEI-3, Hargreaves vs AgERA5 in the same
+#: boxes): Sahel 0-5 E, 13-16 N; Congo basin 20-25 E, 5 S-0.
+LIMITATIONS = {
+    "hargreaves": """
+## Limitations
+
+Hargreaves-Samani PET uses only temperature and extraterrestrial radiation. It
+ignores wind and humidity, so it can underestimate PET in dry, windy regions,
+and the SPEI there can differ from one based on FAO-56 Penman-Monteith PET.
+In a pilot comparison with AgERA5 Penman-Monteith ET0 (same CHIRPS rainfall,
+same method otherwise):
+
+* Sahel (Niger, 0-5 E, 13-16 N): AgERA5 PET was 30% higher; SPEI-3 per-cell
+  correlation 0.59; agreement on drought months (SPEI < -1) Cohen's kappa 0.49.
+* Congo basin (20-25 E, 5 S-0): PET 7% lower with AgERA5, but SPEI-3 almost
+  identical (correlation 0.998, kappa 0.95), because rainfall dominates the
+  water balance.
+
+Use the index with care in arid regions, and in dry seasons where rainfall is
+near zero and the SPEI mostly follows PET.
+""",
+}
+LIMITATIONS["agera5"] = """
+## Limitations
+
+* AgERA5 ET0 has a resolution of 0.1 degree. Its monthly sums are interpolated
+  bilinearly to the 0.05 degree cells, so variation of PET finer than 0.1
+  degree is not represented; finer detail comes from CHIRPS rainfall only.
+* The interpolation uses the valid AgERA5 points among the four around a cell
+  (weights renormalised). A cell, typically on a coast or small island, with no
+  valid AgERA5 point among the four has no PET and so no SPEI.
+* Calibration 1991-2020: SPEI values are relative to that period. Products
+  calibrated on another period (for example the whole record) give somewhat
+  different values for the same water balance.
+* The AgERA5 store on ECMWF's ARCO service is not versioned. `sources.json`
+  records its processing history string; a later reprocessing by ECMWF cannot
+  be pinned to a revision as the Hugging Face inputs are.
+
+## Validation
+
+* Method: on the same inputs, the code reproduces the MOSAIC Central India
+  SPEI-3 and SPEI-12 (max difference 0.09, from input rounding) and the R
+  package SPEI 1.8.1 (max difference 0.005 on 20 test cells).
+* Previous CIAT LATAM SPEI-3 (CHIRPS v3 minus monthly ETo, R `SPEI::spei`,
+  calibrated on 1981-2025, not clipped), 1981-03 to 2025-12, same 0.05 degree
+  cells, previous product clipped to [-3, 3]:
+  * Central American Dry Corridor (90-86 W, 12-15 N): median per-cell
+    correlation 0.989; drought months (SPEI < -1) Cohen's kappa 0.90.
+  * Colombian Andes (76-73 W, 4-7 N): correlation 0.993; kappa 0.92.
+  * Both show the 2015-16 El Nino drought in the same months.
+* Hargreaves-Samani PET (CHIRTS-ERA5) instead of AgERA5, same rainfall and
+  method, SPEI-3 1981-2026:
+  * Central India (78-81 E, 22-26 N): correlation 0.974, kappa 0.80.
+  * Congo basin (20-25 E, 5 S-0): correlation 0.998, kappa 0.95.
+  * Sahel (Niger, 0-5 E, 13-16 N): Hargreaves PET 30% lower than AgERA5;
+    correlation 0.59, kappa 0.49. Temperature-only PET misses the wind and
+    humidity that drive PET in dry regions.
+"""
+
+#: Credit line required by the Copernicus licence for modified C3S products.
+#: The year is that of the access to AgERA5 (``resolved`` in ``inputs.json``).
+COPERNICUS_ATTRIBUTION = (
+    "Contains modified Copernicus Climate Change Service information {year}"
+)
+
+
+def agera5_version(history: str | None) -> dict:
+    """Processor and version from the AgERA5 ARCO ``history`` attribute.
+
+    ``Generated by `pragera5 run_daily_processing 2026-04-03` version 1.3.1,
+    executed on 2026-04-10 08:14:27.9`` -> processor ``pragera5``, version
+    ``1.3.1``, command and execution time. The string is kept verbatim as well;
+    an unexpected form gives only ``history``.
+    """
+    out = {"history": history}
+    m = re.fullmatch(
+        r"Generated by `((\S+)[^`]*)` version (\S+), executed on (.+)", history or ""
+    )
+    if m:
+        out.update(
+            processor=m[2],
+            version=m[3],
+            command=m[1],
+            executed=m[4].split(".")[0],
+        )
+    return out
+
+
+def _attribution(pins: dict) -> str | None:
+    if PET != "agera5":
+        return None
+    return COPERNICUS_ATTRIBUTION.format(year=pins["resolved"][:4])
 
 
 # ------------------------------------------------------------- helpers
@@ -104,10 +209,45 @@ def _area():
     return C.subgrid(CHIRPS_GRID, BBOX)
 
 
+@cache
+def _windows() -> tuple[int, ...]:
+    """``SPEI_WINDOWS`` plus the windows already in the store, sorted.
+
+    A window once built is never dropped by leaving it out of ``SPEI_WINDOWS``:
+    otherwise ``update`` would leave it stale and the card would omit it.
+    """
+    try:
+        stored = zarr.open_group(C.cube_store_url(URL), mode="r").attrs.get(
+            "spei_windows", []
+        )
+    except FileNotFoundError:
+        stored = []
+    stored = tuple(int(w) for w in stored)
+    windows = tuple(sorted({*REQUESTED_WINDOWS, *stored}))
+    from_store = sorted(set(stored) - set(REQUESTED_WINDOWS))
+    log.info(
+        "windows %s (SPEI_WINDOWS %s, in the store %s)",
+        list(windows),
+        list(REQUESTED_WINDOWS),
+        list(stored),
+    )
+    if from_store:
+        log.warning(
+            "SPEI_WINDOWS leaves out window(s) %s that the store already has; "
+            "keeping them",
+            from_store,
+        )
+    return windows
+
+
 def _inputs() -> dict:
+    """The pinned inputs; every step refuses a folder made for the other PET source."""
     if not Path(INPUTS).exists():
         raise SystemExit(f"{INPUTS} missing: run the inspect step first")
-    return json.loads(Path(INPUTS).read_text())
+    pins = json.loads(Path(INPUTS).read_text())
+    if pins.get("pet_method") != PET:
+        raise SystemExit(f"{INPUTS} is for PET {pins.get('pet_method')!r}, not {PET!r}")
+    return pins
 
 
 def _months(pins: dict) -> np.ndarray:
@@ -130,6 +270,12 @@ def _open(pins: dict) -> dict:
         out["et0"] = C.Agera5ET0(
             pins["agera5"]["url"], {"Authorization": f"Bearer {C.cds_key()}"}
         )
+        if out["et0"].attrs.get("history") != pins["agera5"].get("history"):
+            log.warning(
+                "AgERA5 history changed since inputs.json was written: %r (now %r)",
+                pins["agera5"].get("history"),
+                out["et0"].attrs.get("history"),
+            )
     return out
 
 
@@ -163,7 +309,10 @@ def _resolve_inputs() -> dict:
             "url": C.AGERA5_ARCO,
             "variable": C.AGERA5_ET0,
             "time_coverage": [str(e.dates[0]), str(e.dates[-1])],
-            "history": e.attrs.get("history"),
+            **agera5_version(e.attrs.get("history")),
+            "title": e.attrs.get("title"),
+            "institution": e.attrs.get("institution"),
+            "source": e.attrs.get("source"),
             "references": e.attrs.get("references"),
         }
         sets.append(S.complete_months(e.dates))
@@ -187,7 +336,23 @@ def _git_commit() -> str | None:
         return None
 
 
-def _root_attrs(grid: GridSpec, months) -> dict:
+def _agera5_store_attrs(pins: dict) -> dict:
+    a = pins["agera5"]
+    return {
+        "agera5_version": f"{a.get('processor')} {a.get('version')}"
+        if a.get("version")
+        else None,
+        "agera5_history": a.get("history"),
+    }
+
+
+def _root_attrs(grid: GridSpec, months, pins: dict) -> dict:
+    extra = {}
+    if PET == "agera5":
+        extra = {
+            "acknowledgement": _attribution(pins),
+            **_agera5_store_attrs(pins),
+        }
     return {
         "Conventions": "CF-1.10",
         "id": DATASET,
@@ -195,7 +360,8 @@ def _root_attrs(grid: GridSpec, months) -> dict:
         "institution": "Alliance of Bioversity International and CIAT",
         "source": f"CHIRPS v3.0 daily precipitation (RNL) minus {PET_TEXT[PET]}",
         "references": "Vicente-Serrano, Begueria & Lopez-Moreno (2010), J. Climate "
-        "23:1696-1718; Begueria et al. (2014), Int. J. Climatol. 34:3001-3023",
+        "23:1696-1718; Begueria et al. (2014), Int. J. Climatol. 34:3001-3023"
+        + ("; AgERA5 doi:10.24381/cds.6c68c9bb" if PET == "agera5" else ""),
         "license": "CC-BY-4.0",
         "spatial_resolution_deg": grid.res,
         "geospatial_lat_min": grid.south,
@@ -204,11 +370,12 @@ def _root_attrs(grid: GridSpec, months) -> dict:
         "geospatial_lon_max": grid.east,
         "time_coverage_start": str(months[0]),
         "time_coverage_end": str(months[-1]),
-        "spei_windows": list(WINDOWS),
+        "spei_windows": list(_windows()),
         "calibration_period": f"{CALIBRATION[0]}-{CALIBRATION[1]}",
         "distribution": DISTRIBUTION,
         "fitting_method": FITTING,
         "pet_method": PET_TEXT[PET],
+        **extra,
         "build_complete": False,
     }
 
@@ -230,7 +397,7 @@ def _var_attrs() -> dict:
             "pet_method": PET_TEXT[PET],
         },
     }
-    for w in WINDOWS:
+    for w in _windows():
         out[C.spei_name(w)] = {
             "long_name": f"Standardized Precipitation Evapotranspiration Index, {w}-month",
             "cell_methods": f"time: sum (interval: {w} months) of precip - pet",
@@ -324,15 +491,14 @@ def _tile_spei(root, tile, area, months, w, rows=None):
 def inspect():
     """Pin the input revisions and the months to build, in ``inputs.json``.
 
-    Once tiles have been written the pins are kept, so a resumed build reads
-    exactly the same inputs; ``update`` is the only step that moves them.
+    An existing ``inputs.json`` is always kept, so a resumed build reads exactly
+    the same inputs, and a build can be reproduced elsewhere by copying the file
+    into an empty output folder. ``update`` is the only step that moves the pins.
     """
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
-    if Path(INPUTS).exists() and any(C.TileLog(TILE_LOG).data.values()):
+    if Path(INPUTS).exists():
         pins = _inputs()
-        log.info(
-            "keeping the pinned inputs (tiles already written): %s", pins["months"]
-        )
+        log.info("keeping the pinned inputs in %s: %s", INPUTS, pins["months"])
     else:
         pins = _resolve_inputs()
         write_json(INPUTS, pins)
@@ -350,7 +516,7 @@ def inspect():
         *pins["months"],
         PET,
         {
-            k: (v.get("revision") or v.get("history", ""))[:12]
+            k: v.get("revision", "")[:12] or f"{v.get('processor')} {v.get('version')}"
             for k, v in pins.items()
             if isinstance(v, dict)
         },
@@ -367,8 +533,8 @@ def create_store():
         C.cube_store_url(URL),
         grid,
         months,
-        WINDOWS,
-        _root_attrs(grid, months),
+        _windows(),
+        _root_attrs(grid, months, pins),
         _var_attrs(),
     )
     if root["time"].shape[0] != len(months):
@@ -413,7 +579,7 @@ def spei():
     root = C.open_store_rw(URL)
     tl = C.TileLog(TILE_LOG)
     ready = tl.done("monthly_inputs")
-    for w in WINDOWS:
+    for w in _windows():
         step = C.spei_name(w)
         done = tl.done(step)
         todo = [t for t in C.tiles(area) if t.key in ready and t.key not in done]
@@ -435,11 +601,11 @@ def verify():
     tl = C.TileLog(TILE_LOG)
     report, problems = {}, []
     all_tiles = C.tiles(area)
-    for step in ["monthly_inputs"] + [C.spei_name(w) for w in WINDOWS]:
+    for step in ["monthly_inputs"] + [C.spei_name(w) for w in _windows()]:
         missing = [t.key for t in all_tiles if t.key not in tl.done(step)]
         if missing:
             problems.append(f"{step}: {len(missing)} tile(s) not done")
-    for w in WINDOWS:
+    for w in _windows():
         name = C.spei_name(w)
         per_month = np.zeros(len(months), np.int64)
         stats = {
@@ -504,8 +670,9 @@ def write_sources():
             "dataset": DATASET,
             "inputs": {k: v for k, v in pins.items() if isinstance(v, dict)},
             "pet_method": PET_TEXT[PET],
+            "attribution": _attribution(pins),
             "months": pins["months"],
-            "windows": list(WINDOWS),
+            "windows": list(_windows()),
             "calibration_period": list(CALIBRATION),
             "distribution": DISTRIBUTION,
             "fitting_method": FITTING,
@@ -519,11 +686,20 @@ def write_sources():
     )
 
 
+def _agera5_text(pins: dict) -> str:
+    a = pins["agera5"]
+    if a.get("version"):
+        return (
+            f"processed with {a['processor']} {a['version']}, executed {a['executed']}"
+        )
+    return f'history: "{a.get("history")}"'
+
+
 def write_card():
     """Hugging Face dataset card (README.md)."""
     pins = _inputs()
     grid, _ = _area()
-    windows = ", ".join(f"`{C.spei_name(w)}` ({w}-month)" for w in WINDOWS)
+    windows = ", ".join(f"`{C.spei_name(w)}` ({w}-month)" for w in _windows())
     text = (
         f"""---
 license: cc-by-4.0
@@ -564,9 +740,21 @@ updates.
   (revision `{pins["chirts"]["revision"][:12]}`)
 """
             if PET == "hargreaves"
-            else """* AgERA5 (Copernicus Climate Change Service), FAO-56 Penman-Monteith ET0,
-  doi:10.24381/cds.6c68c9bb
+            else f"""* AgERA5 (Copernicus Climate Change Service), FAO-56 Penman-Monteith ET0
+  (`{C.AGERA5_ET0}`), doi:10.24381/cds.6c68c9bb, from the ECMWF ARCO store
+  {C.AGERA5_ARCO}
+  ({_agera5_text(pins)})
 """
+        )
+        + (LIMITATIONS.get(PET, ""))
+        + (
+            f"""
+## Attribution
+
+{_attribution(pins)}.
+"""
+            if _attribution(pins)
+            else ""
         )
         + """
 ## Citation
@@ -614,7 +802,7 @@ def write_cdh():
             "unit": "1",
             "nodata": C.SPEI_FILL,
         }
-        for w in WINDOWS
+        for w in _windows()
     ] + [
         {
             "name": "precip",
@@ -646,6 +834,7 @@ def write_cdh():
             f"{FITTING}."
         ),
         "license": "CC-BY-4.0",
+        **({"attribution": a} if (a := _attribution(pins)) else {}),
         "resource_type": "dataset",
         "keywords": ["drought", "SPEI", "water balance", "monthly", "gridded"],
         "contact": [
@@ -753,7 +942,7 @@ def update():
     _, area = _area()
     root = C.open_store_rw(URL)
     root.attrs["build_complete"] = False
-    C.extend_time(root, months, WINDOWS)
+    C.extend_time(root, months, _windows())
     tl = C.TileLog(TILE_LOG)
     done = tl.done(step)
     src = _open(pins)
@@ -773,21 +962,56 @@ def update():
         root["pet"][rows, ry, rx] = (
             pet if pet is not None else precip * np.nan
         ).astype("f4")
-        for w in WINDOWS:
+        for w in _windows():
             _tile_spei(root, tile, area, months, w, rows=rows)
         tl.mark(step, tile.key, {})
     root.attrs.update(
         time_coverage_end=str(months[-1]),
         last_updated=_today(),
     )
+    if PET == "agera5":
+        root.attrs.update(
+            acknowledgement=_attribution(pins), **_agera5_store_attrs(pins)
+        )
     history = old.get("history", []) + [{k: old[k] for k in ("resolved", "months")}]
     write_json(INPUTS, {**pins, "history": history})
     C.consolidate(URL)
     log.info("update done; run verify, then write_sources and write_card")
 
 
+def refresh_agera5_version():
+    """Re-derive the AgERA5 version fields from the pinned history string.
+
+    Metadata only: rewrites the ``agera5`` entry of ``inputs.json`` and the
+    store attributes ``agera5_version`` / ``agera5_history``; no data is read
+    or written. Follow with ``write_sources write_card write_cdh``.
+    """
+    if PET != "agera5":
+        raise SystemExit("refresh_agera5_version is for SPEI_PET=agera5")
+    pins = _inputs()
+    a = {k: v for k, v in pins["agera5"].items() if k not in ("version", "processor")}
+    pins["agera5"] = {**a, **agera5_version(a.get("history"))}
+    write_json(INPUTS, pins)
+    root = C.open_store_rw(URL)
+    root.attrs.update(_agera5_store_attrs(pins))
+    C.consolidate(URL)
+    log.info("AgERA5 version: %s", _agera5_store_attrs(pins))
+
+
 def publish_plan():
     """Report what ``publish`` would send to Hugging Face. Sends nothing."""
+    local = hf.local_files(Path(OUTPUT), STORE_NAME, HF_SIDECARS)
+    in_store = [f for k, f in local.items() if k.startswith(f"{STORE_NAME}/")]
+    log.info(
+        "target https://huggingface.co/datasets/%s: %d files, %.2f GB "
+        "(store %d files, %.2f GB; sidecars %s)",
+        HF_REPO,
+        len(local),
+        sum(f.stat().st_size for f in local.values()) / 1e9,
+        len(in_store),
+        sum(f.stat().st_size for f in in_store) / 1e9,
+        sorted(k for k in local if not k.startswith(f"{STORE_NAME}/")),
+    )
     log.info(
         "plan for %s: %s",
         HF_REPO,
@@ -818,5 +1042,5 @@ if __name__ == "__main__":
         write_sources,
         write_card,
         write_cdh,
-        on_request=(update, publish_plan, publish),
+        on_request=(update, refresh_agera5_version, publish_plan, publish),
     )
